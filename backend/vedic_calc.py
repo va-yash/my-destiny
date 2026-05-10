@@ -739,6 +739,12 @@ def calculate_chart(
         },
         "core_trinity": core_trinity,
         "d1":           d1,
+        # ── Full-precision sidereal longitudes ──────────────────────────────
+        # Used by prompt_builder for second-accurate Vimshottari dasha timing.
+        # Do NOT round these — the dasha engine needs every decimal place.
+        "raw_lons": {
+            name: raw[name]["lon"] for name in PLANETS_ORDER
+        } | {"Ascendant": asc_sidereal},
     }
 
     # Divisional charts + their ascendant indices
