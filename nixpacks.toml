@@ -1,10 +1,10 @@
 # Root-level Nixpacks config for Railway monorepo deployment.
-# Nix Python is "externally managed" (PEP 668) so we create a venv first —
-# venvs are always writable and bypass the immutable Nix store restriction.
-# pyswisseph is a C extension; gcc is required to compile it from source.
+# pyswisseph (.so) needs libstdc++.so.6 at runtime — that lives in
+# stdenv.cc.cc.lib (separate from the gcc compiler package).
+# LD_LIBRARY_PATH exposes the Nix profile libs to the dynamic linker.
 
 [phases.setup]
-nixPkgs = ["gcc", "python311"]
+nixPkgs = ["gcc", "stdenv.cc.cc.lib", "python311"]
 
 [phases.install]
 cmds = [
@@ -12,6 +12,9 @@ cmds = [
   "/app/.venv/bin/pip install --upgrade pip setuptools wheel",
   "/app/.venv/bin/pip install -r backend/requirements.txt"
 ]
+
+[variables]
+LD_LIBRARY_PATH = "/root/.nix-profile/lib"
 
 [start]
 cmd = "cd backend && /app/.venv/bin/uvicorn main:app --host 0.0.0.0 --port $PORT"
