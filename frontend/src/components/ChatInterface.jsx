@@ -148,10 +148,10 @@ function MessageBubble({ msg, isStreaming }) {
       )}
 
       <div style={{
-        maxWidth: isUser ? '60%' : '82%',
+        maxWidth: isUser ? '55%' : '80%',
         background: isUser
-          ? 'linear-gradient(135deg, rgba(201,168,76,0.18), rgba(201,168,76,0.08))'
-          : 'rgba(18,21,42,0.8)',
+          ? 'var(--msg-user-bg)'
+          : 'var(--msg-ai-bg)',
         border: `1px solid ${isUser ? 'rgba(201,168,76,0.3)' : 'rgba(180,155,100,0.12)'}`,
         borderRadius: isUser ? '16px 4px 16px 16px' : '4px 16px 16px 16px',
         padding: '14px 18px',
@@ -170,8 +170,8 @@ function MessageBubble({ msg, isStreaming }) {
           <div style={{
             color: 'var(--text)',
             fontFamily: 'var(--font-body)',
-            fontSize: '15.5px',
-            lineHeight: 1.72,
+            fontSize: '16px',
+            lineHeight: 1.7,
           }}>
             {renderMarkdown(msg.content)}
             {isStreaming && <Cursor />}
@@ -323,17 +323,19 @@ export default function ChatInterface({ session, onReset }) {
       display: 'flex',
       flexDirection: 'column',
       height: '100vh',
-      maxWidth: '780px',
+      maxWidth: '1100px',
+      width: '100%',
       margin: '0 auto',
       position: 'relative',
       zIndex: 1,
+      paddingTop: '52px',
     }}>
 
       {/* ── Header ─────────────────────────────────────────────────────── */}
       <header style={{
         padding: '20px 28px',
         borderBottom: '1px solid var(--border)',
-        background: 'rgba(7,8,13,0.9)',
+        background: 'var(--chat-bg)',
         backdropFilter: 'blur(16px)',
         display: 'flex',
         alignItems: 'center',
@@ -504,7 +506,7 @@ export default function ChatInterface({ session, onReset }) {
       <div style={{
         padding: '16px 28px 24px',
         borderTop: '1px solid var(--border)',
-        background: 'rgba(7,8,13,0.9)',
+        background: 'var(--chat-bg)',
         backdropFilter: 'blur(16px)',
         flexShrink: 0,
       }}>
@@ -512,7 +514,7 @@ export default function ChatInterface({ session, onReset }) {
           display: 'flex',
           gap: '12px',
           alignItems: 'flex-end',
-          background: 'rgba(18,21,42,0.8)',
+          background: 'var(--input-bg)',
           border: '1px solid rgba(180,155,100,0.22)',
           borderRadius: '14px',
           padding: '4px 4px 4px 18px',
