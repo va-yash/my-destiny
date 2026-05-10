@@ -1,0 +1,11 @@
+# Root-level Nixpacks config for Railway monorepo deployment.
+# pyswisseph is a C extension — gcc and Python headers are required to compile it.
+ 
+[phases.setup]
+nixPkgs = ["gcc", "python311", "python311Packages.pip"]
+ 
+[phases.install]
+cmds = ["pip install -r backend/requirements.txt"]
+ 
+[start]
+cmd = "cd backend && uvicorn main:app --host 0.0.0.0 --port $PORT"
