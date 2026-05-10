@@ -1,16 +1,17 @@
 # Root-level Nixpacks config for Railway monorepo deployment.
-# pyswisseph is a C extension — gcc and Python headers are required to compile it.
-# pip is bootstrapped via ensurepip (Nix pip packages don't link as Python modules).
- 
+# Nix Python is "externally managed" (PEP 668) so we create a venv first —
+# venvs are always writable and bypass the immutable Nix store restriction.
+# pyswisseph is a C extension; gcc is required to compile it from source.
+
 [phases.setup]
 nixPkgs = ["gcc", "python311"]
- 
+
 [phases.install]
 cmds = [
-  "python3 -m ensurepip --upgrade",
-  "python3 -m pip install --upgrade pip setuptools wheel",
-  "python3 -m pip install -r backend/requirements.txt"
+  "python3 -m venv /app/.venv",
+  "/app/.venv/bin/pip install --upgrade pip setuptools wheel",
+  "/app/.venv/bin/pip install -r backend/requirements.txt"
 ]
- 
+
 [start]
-cmd = "cd backend && uvicorn main:app --host 0.0.0.0 --port $PORT"
+cmd = "cd backend && /app/.venv/bin/uvicorn main:app --host 0.0.0.0 --port $PORT"
