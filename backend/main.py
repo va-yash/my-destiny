@@ -42,7 +42,7 @@ ANTHROPIC_KEY   = os.getenv("ANTHROPIC_API_KEY", "")
 OPENCAGE_KEY    = os.getenv("OPENCAGE_API_KEY", "")
 ALLOWED_ORIGIN  = os.getenv("ALLOWED_ORIGIN", "*")
 CLAUDE_MODEL    = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-5")
-MAX_TOKENS      = int(os.getenv("MAX_TOKENS", "2000"))
+MAX_TOKENS      = int(os.getenv("MAX_TOKENS", "8000"))
 
 # ─── In-memory session store ──────────────────────────────────────────────────
 # { session_id: { "system_prompt": str, "birth_summary": dict } }
@@ -65,11 +65,12 @@ app.add_middleware(
 # ─── Pydantic models ──────────────────────────────────────────────────────────
 
 class BirthInput(BaseModel):
-    name:   str = ""
-    dob:    str          # "YYYY-MM-DD"
-    tob:    str          # "HH:MM"
-    pob:    str          # "Nagpur, India"
-    gender: str = ""
+    name:     str = ""
+    dob:      str          # "YYYY-MM-DD"
+    tob:      str          # "HH:MM"
+    pob:      str          # "Nagpur, India"
+    gender:   str = ""
+    language: str = "English"
 
 
 class AskInput(BaseModel):
@@ -77,6 +78,7 @@ class AskInput(BaseModel):
     system_prompt: str       = ""   # preferred: client sends this back every time
     question:      str
     history:       list[dict] = []  # [{role: "user"|"assistant", content: str}]
+    language:      str       = "English"
 
 
 # ─── Geocoding + timezone helper ─────────────────────────────────────────────
@@ -172,7 +174,8 @@ async def create_chart(birth: BirthInput):
         system_prompt = build_system_prompt(
             chart,
             birth_dt=birth_utc,
-            query_date=datetime.utcnow()
+            query_date=datetime.utcnow(),
+            language=birth.language,
         )
     except Exception as e:
         raise HTTPException(500, f"Prompt build failed: {str(e)}")
@@ -187,6 +190,7 @@ async def create_chart(birth: BirthInput):
             "tob":     birth.tob,
             "pob":     geo["formatted_address"],
             "gender":  birth.gender,
+            "language": birth.language,
             "lat":     geo["lat"],
             "lng":     geo["lng"],
             "timezone": geo["timezone"],
@@ -212,6 +216,7 @@ async def create_chart(birth: BirthInput):
         "moon_pada":     ct["moon"]["pada"],
         "location":      geo["formatted_address"],
         "timezone":      geo["timezone"],
+        "language":      birth.language,
     }
     return summary
 
@@ -232,6 +237,16 @@ async def ask_question(req: AskInput):
         system_prompt = SESSIONS[req.session_id]["system_prompt"]
     else:
         raise HTTPException(404, "Session not found. Please re-enter birth details.")
+
+    # ── Inject language instruction at the top of the system prompt ───────
+    language = req.language or "English"
+    if language and language.lower() != "english":
+        lang_instruction = (
+            f"LANGUAGE INSTRUCTION: You must respond entirely in {language}. "
+            f"All your answers, explanations, and astrological insights must be written in {language}. "
+            f"Do not mix languages — respond only in {language}.\n\n"
+        )
+        system_prompt = lang_instruction + system_prompt
 
     if not ANTHROPIC_KEY:
         raise HTTPException(500, "ANTHROPIC_API_KEY not configured")
