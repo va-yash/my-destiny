@@ -586,7 +586,7 @@ def format_yoga_block(yogas: list[dict]) -> str:
 # ─── System Prompt Template ───────────────────────────────────────────────────
 
 SYSTEM_PROMPT_TEMPLATE = """\
-You are my personal Vedic astrology advisor — a masterful Jyotishi with deep 
+{language_instruction}You are my personal Vedic astrology advisor — a masterful Jyotishi with deep 
 roots in classical Parashari and Jaimini traditions. Below is my complete birth 
 chart, divisional charts, dasha timeline, and yoga profile. This is the foundation 
 of everything you tell me. Study it deeply before responding.
@@ -656,7 +656,7 @@ actual steps.
 
 # ─── Master builder ───────────────────────────────────────────────────────────
 
-def build_system_prompt(chart: dict, birth_dt: datetime, query_date: datetime = None) -> str:
+def build_system_prompt(chart: dict, birth_dt: datetime, query_date: datetime = None, language: str = "English") -> str:
     """
     Build the complete Claude system prompt from a calculated chart.
 
@@ -665,6 +665,7 @@ def build_system_prompt(chart: dict, birth_dt: datetime, query_date: datetime = 
     chart       : Output of vedic_calc.calculate_chart()
     birth_dt    : Actual birth datetime in UTC (for dasha timing)
     query_date  : Date for 'active dasha' calculation (default: now)
+    language    : Language for responses (default: English)
     """
     if query_date is None:
         query_date = datetime.utcnow()
@@ -689,10 +690,21 @@ def build_system_prompt(chart: dict, birth_dt: datetime, query_date: datetime = 
     yogas      = detect_yogas(chart)
     yoga_block = format_yoga_block(yogas)
 
+    # Build language instruction
+    if language and language.lower() != "english":
+        language_instruction = (
+            f"LANGUAGE INSTRUCTION: You must respond entirely in {language}. "
+            f"All your answers, explanations, and astrological insights must be written in {language}. "
+            f"Do not mix languages — respond only in {language}.\n\n"
+        )
+    else:
+        language_instruction = ""
+
     return SYSTEM_PROMPT_TEMPLATE.format(
         chart_block=chart_block,
         dasha_block=dasha_block,
         yoga_block=yoga_block,
+        language_instruction=language_instruction,
     )
 
 
