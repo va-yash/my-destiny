@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { Analytics } from '@vercel/analytics/react'
 import BirthForm from './components/BirthForm.jsx'
 import ChatInterface from './components/ChatInterface.jsx'
 import KnowTheCreator from './components/KnowTheCreator.jsx'
@@ -50,6 +51,8 @@ export default function App() {
       ) : (
         <BirthForm onChartReady={handleChartReady} />
       )}
+      
+      <Analytics />
     </>
   )
 }
