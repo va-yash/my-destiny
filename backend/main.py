@@ -9,6 +9,13 @@ Environment variables required (.env):
 
 Run locally:
   uvicorn main:app --reload --port 8000
+
+STATELESS DESIGN (v2)
+  /api/chart now returns system_prompt in the response.
+  The frontend stores it and sends it back on every /api/ask call.
+  This eliminates "Session not found" errors caused by Railway
+  container restarts wiping the in-memory SESSIONS dict.
+  SESSIONS is kept as an optional short-lived cache only.
 """
 
 import os
@@ -66,9 +73,10 @@ class BirthInput(BaseModel):
 
 
 class AskInput(BaseModel):
-    session_id: str
-    question:   str
-    history:    list[dict] = []   # [{role: "user"|"assistant", content: str}]
+    session_id:    str       = ""   # kept for backward compat; no longer required
+    system_prompt: str       = ""   # preferred: client sends this back every time
+    question:      str
+    history:       list[dict] = []  # [{role: "user"|"assistant", content: str}]
 
 
 # ─── Geocoding + timezone helper ─────────────────────────────────────────────
@@ -190,17 +198,20 @@ async def create_chart(birth: BirthInput):
     d1  = chart["d1"]
 
     summary = {
-        "session_id": session_id,
-        "name":       birth.name or "Friend",
-        "ascendant":  ct["ascendant"]["sign"],
+        "session_id":    session_id,
+        # ── Stateless fix: return system_prompt so the client can ──────────
+        # re-send it on every /api/ask request. This survives server restarts.
+        "system_prompt": system_prompt,
+        "name":          birth.name or "Friend",
+        "ascendant":     ct["ascendant"]["sign"],
         "asc_nakshatra": ct["ascendant"]["nakshatra"],
-        "asc_pada":   ct["ascendant"]["pada"],
-        "sun_sign":   ct["sun"]["sign"],
-        "moon_sign":  ct["moon"]["sign"],
+        "asc_pada":      ct["ascendant"]["pada"],
+        "sun_sign":      ct["sun"]["sign"],
+        "moon_sign":     ct["moon"]["sign"],
         "moon_nakshatra": ct["moon"]["nakshatra"],
-        "moon_pada":  ct["moon"]["pada"],
-        "location":   geo["formatted_address"],
-        "timezone":   geo["timezone"],
+        "moon_pada":     ct["moon"]["pada"],
+        "location":      geo["formatted_address"],
+        "timezone":      geo["timezone"],
     }
     return summary
 
@@ -212,11 +223,15 @@ async def ask_question(req: AskInput):
     Takes session_id + user question + conversation history.
     Returns Server-Sent Events with Claude's streamed response.
     """
-    if req.session_id not in SESSIONS:
+    # ── Stateless mode: client sends system_prompt directly ──────────────
+    # This survives container restarts (e.g. Railway deploys).
+    # Fall back to in-memory SESSIONS cache for older clients.
+    if req.system_prompt:
+        system_prompt = req.system_prompt
+    elif req.session_id and req.session_id in SESSIONS:
+        system_prompt = SESSIONS[req.session_id]["system_prompt"]
+    else:
         raise HTTPException(404, "Session not found. Please re-enter birth details.")
-
-    session       = SESSIONS[req.session_id]
-    system_prompt = session["system_prompt"]
 
     if not ANTHROPIC_KEY:
         raise HTTPException(500, "ANTHROPIC_API_KEY not configured")
