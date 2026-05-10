@@ -252,6 +252,7 @@ export default function ChatInterface({ session, onReset }) {
           system_prompt: session.system_prompt || '',
           question:      text.trim(),
           history,
+          language:      session.language || 'English',
         }),
       })
 
