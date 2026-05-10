@@ -26,6 +26,15 @@ const LABEL_STYLES = {
   marginBottom: '7px',
 }
 
+const LANGUAGES = [
+  'English', 'Hindi', 'Spanish', 'French', 'German', 'Italian', 'Portuguese',
+  'Arabic', 'Chinese (Simplified)', 'Chinese (Traditional)', 'Japanese', 'Korean',
+  'Russian', 'Dutch', 'Turkish', 'Bengali', 'Urdu', 'Tamil', 'Telugu', 'Marathi',
+  'Gujarati', 'Punjabi', 'Malayalam', 'Kannada', 'Indonesian', 'Thai', 'Vietnamese',
+  'Polish', 'Ukrainian', 'Persian', 'Swahili', 'Greek', 'Hebrew', 'Swedish',
+  'Norwegian', 'Danish', 'Finnish', 'Czech', 'Romanian', 'Hungarian',
+]
+
 function Field({ label, required, children }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column' }}>
@@ -39,7 +48,7 @@ function Field({ label, required, children }) {
 
 export default function BirthForm({ onChartReady }) {
   const [form, setForm] = useState({
-    name: '', dob: '', tob: '', pob: '', gender: ''
+    name: '', dob: '', tob: '', pob: '', gender: '', language: 'English'
   })
   const [loading, setLoading] = useState(false)
   const [error, setError]     = useState('')
@@ -68,7 +77,7 @@ export default function BirthForm({ onChartReady }) {
       if (!res.ok) {
         throw new Error(data.detail || 'Failed to calculate chart')
       }
-      onChartReady(data)
+      onChartReady({ ...data, language: form.language })
     } catch (err) {
       setError(err.message || 'Something went wrong. Please try again.')
     } finally {
@@ -100,6 +109,55 @@ export default function BirthForm({ onChartReady }) {
         boxShadow: 'var(--shadow), var(--glow)',
         backdropFilter: 'blur(20px)',
       }}>
+
+        {/* Language Selector */}
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'flex-end',
+          marginBottom: '28px',
+          gap: '10px',
+        }}>
+          <span style={{
+            fontFamily: 'var(--font-display)',
+            fontSize: '11px',
+            letterSpacing: '0.16em',
+            textTransform: 'uppercase',
+            color: 'var(--gold)',
+            opacity: 0.75,
+          }}>
+            🌐 Language
+          </span>
+          <select
+            name="language"
+            value={form.language}
+            onChange={onChange}
+            onFocus={() => setFocused('language')}
+            onBlur={() => setFocused(null)}
+            style={{
+              background: 'rgba(13,15,24,0.9)',
+              border: focused === 'language'
+                ? '1px solid var(--gold-dim)'
+                : '1px solid rgba(180,155,100,0.3)',
+              borderRadius: '8px',
+              color: 'var(--gold-light)',
+              fontFamily: 'var(--font-body)',
+              fontSize: '13px',
+              padding: '7px 12px',
+              outline: 'none',
+              cursor: 'pointer',
+              appearance: 'none',
+              minWidth: '160px',
+              boxShadow: focused === 'language' ? '0 0 0 3px rgba(201,168,76,0.10)' : 'none',
+              transition: 'border-color 0.2s, box-shadow 0.2s',
+            }}
+          >
+            {LANGUAGES.map(lang => (
+              <option key={lang} value={lang}>{lang}</option>
+            ))}
+          </select>
+        </div>
+
         {/* Header */}
         <div style={{ textAlign: 'center', marginBottom: '42px' }}>
           <div style={{
