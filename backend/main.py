@@ -42,7 +42,7 @@ ANTHROPIC_KEY   = os.getenv("ANTHROPIC_API_KEY", "")
 OPENCAGE_KEY    = os.getenv("OPENCAGE_API_KEY", "")
 ALLOWED_ORIGIN  = os.getenv("ALLOWED_ORIGIN", "*")
 CLAUDE_MODEL    = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-5")
-MAX_TOKENS      = int(os.getenv("MAX_TOKENS", "8000"))
+MAX_TOKENS      = int(os.getenv("MAX_TOKENS", "2500"))
 
 # ─── In-memory session store ──────────────────────────────────────────────────
 # { session_id: { "system_prompt": str, "birth_summary": dict } }
