@@ -246,8 +246,11 @@ export default function ChatInterface({ session, onReset }) {
         headers: { 'Content-Type': 'application/json' },
         signal: controller.signal,
         body: JSON.stringify({
-          session_id: session.session_id,
-          question:   text.trim(),
+          session_id:    session.session_id,
+          // Stateless fix: send system_prompt back so the server never needs
+          // to look it up from the in-memory store (survives restarts).
+          system_prompt: session.system_prompt || '',
+          question:      text.trim(),
           history,
         }),
       })
