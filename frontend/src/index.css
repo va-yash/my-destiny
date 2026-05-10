@@ -1,5 +1,6 @@
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
+/* ── Dark mode (default) ────────────────────────────────────── */
 :root {
   --bg:          #07080d;
   --bg-card:     #0d0f18;
@@ -16,13 +17,42 @@
   --text-muted:  #3d3830;
   --accent-teal: #3db8aa;
   --accent-rose: #c46a6a;
+  --nav-bg:      rgba(7, 8, 13, 0.92);
+  --chat-bg:     rgba(7, 8, 13, 0.9);
+  --input-bg:    rgba(18, 21, 42, 0.8);
+  --msg-user-bg: linear-gradient(135deg, rgba(201,168,76,0.18), rgba(201,168,76,0.08));
+  --msg-ai-bg:   rgba(18, 21, 42, 0.8);
   --font-display: 'Cormorant Garamond', Georgia, serif;
-  --font-body:    'Crimson Pro', Georgia, serif;
+  --font-body:    'Inter', system-ui, -apple-system, sans-serif;
   --font-mono:    'JetBrains Mono', monospace;
   --radius:    10px;
   --radius-lg: 18px;
   --shadow:    0 4px 32px rgba(0, 0, 0, 0.6);
   --glow:      0 0 40px rgba(201, 168, 76, 0.08);
+}
+
+/* ── Light mode ─────────────────────────────────────────────── */
+[data-theme="light"] {
+  --bg:          #f8f5f0;
+  --bg-card:     #ffffff;
+  --bg-raised:   #f0ece4;
+  --bg-hover:    #e8e2d8;
+  --border:      rgba(140, 110, 60, 0.18);
+  --border-glow: rgba(160, 120, 50, 0.4);
+  --gold:        #9a6c1a;
+  --gold-light:  #7a5012;
+  --gold-dim:    rgba(154, 108, 26, 0.5);
+  --cream:       #2c2416;
+  --text:        #3a3020;
+  --text-dim:    #8a7860;
+  --text-muted:  #b8a890;
+  --nav-bg:      rgba(248, 245, 240, 0.95);
+  --chat-bg:     rgba(248, 245, 240, 0.95);
+  --input-bg:    rgba(255, 255, 255, 0.9);
+  --msg-user-bg: linear-gradient(135deg, rgba(154,108,26,0.12), rgba(154,108,26,0.06));
+  --msg-ai-bg:   rgba(255, 255, 255, 0.9);
+  --shadow:    0 4px 32px rgba(0, 0, 0, 0.12);
+  --glow:      0 0 40px rgba(154, 108, 26, 0.06);
 }
 
 html, body, #root {
@@ -31,12 +61,17 @@ html, body, #root {
   background: var(--bg);
   color: var(--text);
   font-family: var(--font-body);
-  font-size: 17px;
+  font-size: 16px;
   line-height: 1.65;
   -webkit-font-smoothing: antialiased;
+  transition: background 0.25s, color 0.25s;
 }
 
 ::-webkit-scrollbar { width: 4px; }
 ::-webkit-scrollbar-track { background: var(--bg); }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
 ::selection { background: var(--gold-dim); color: var(--cream); }
+
+[data-theme="light"] .stars-bg {
+  opacity: 0.08 !important;
+}
