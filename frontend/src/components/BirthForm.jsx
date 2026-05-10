@@ -4,7 +4,7 @@ const API = import.meta.env.VITE_API_URL || ''
 
 const FIELD_STYLES = {
   width: '100%',
-  background: 'rgba(13,15,24,0.8)',
+  background: 'var(--bg-raised)',
   border: '1px solid rgba(180,155,100,0.22)',
   borderRadius: '8px',
   color: 'var(--cream)',
@@ -95,14 +95,14 @@ export default function BirthForm({ onChartReady }) {
       display: 'flex',
       alignItems: 'center',
       justifyContent: 'center',
-      padding: '24px',
+      padding: '80px 24px 24px',
       position: 'relative',
       zIndex: 1,
     }}>
       <div style={{
         width: '100%',
         maxWidth: '520px',
-        background: 'rgba(13,15,24,0.92)',
+        background: 'var(--bg-card)',
         border: '1px solid var(--border)',
         borderRadius: 'var(--radius-lg)',
         padding: '52px 48px',
@@ -135,7 +135,7 @@ export default function BirthForm({ onChartReady }) {
             onFocus={() => setFocused('language')}
             onBlur={() => setFocused(null)}
             style={{
-              background: 'rgba(13,15,24,0.9)',
+              background: 'var(--bg-raised)',
               border: focused === 'language'
                 ? '1px solid var(--gold-dim)'
                 : '1px solid rgba(180,155,100,0.3)',
