@@ -1,5 +1,5 @@
 """
-main.py — Jyotish AI Backend
+main.py — Astro-gyaani Backend
 FastAPI + pyswisseph + OpenCage + Anthropic Claude
 
 Environment variables required (.env):
@@ -16,12 +16,19 @@ STATELESS DESIGN (v2)
   This eliminates "Session not found" errors caused by Railway
   container restarts wiping the in-memory SESSIONS dict.
   SESSIONS is kept as an optional short-lived cache only.
+
+TOKEN OPTIMISATION (v3)
+  The system prompt is large (~20k tokens). We use Anthropic's
+  prompt-caching API so repeated queries within a 5-minute window
+  only pay for the (small) user question tokens, not the full system
+  prompt every time. After the first call, input tokens drop ~90%.
+  Header: anthropic-beta: prompt-caching-2024-07-31
+  System is sent as a content array with cache_control on the block.
 """
 
 import os
 import json
 import uuid
-import asyncio
 from datetime import datetime
 from typing import AsyncGenerator
 
@@ -45,14 +52,11 @@ CLAUDE_MODEL    = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-5")
 MAX_TOKENS      = int(os.getenv("MAX_TOKENS", "2500"))
 
 # ─── In-memory session store ──────────────────────────────────────────────────
-# { session_id: { "system_prompt": str, "birth_summary": dict } }
-# At 10-12 users/mo this is perfectly adequate.
-# When you scale to 100+: swap this dict for Redis.
 SESSIONS: dict[str, dict] = {}
 
 # ─── App setup ────────────────────────────────────────────────────────────────
 
-app = FastAPI(title="Jyotish AI", version="1.0.0")
+app = FastAPI(title="Astro-gyaani", version="1.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -74,30 +78,23 @@ class BirthInput(BaseModel):
 
 
 class AskInput(BaseModel):
-    session_id:    str       = ""   # kept for backward compat; no longer required
-    system_prompt: str       = ""   # preferred: client sends this back every time
-    question:      str
-    history:       list[dict] = []  # [{role: "user"|"assistant", content: str}]
-    language:      str       = "English"
+    session_id:         str        = ""   # kept for backward compat
+    system_prompt:      str        = ""   # preferred: client sends this every time
+    question:           str
+    history:            list[dict] = []   # [{role: "user"|"assistant", content: str}]
+    language:           str        = "English"
+    include_references: bool       = True  # True = show planetary refs; False = hide them
 
 
 # ─── Geocoding + timezone helper ─────────────────────────────────────────────
 
 async def geocode_city(city: str) -> dict:
-    """
-    Convert city name → lat, lng, timezone string via OpenCage.
-    Returns { lat, lng, timezone, formatted_address }
-    """
+    """Convert city name → lat, lng, timezone via OpenCage."""
     if not OPENCAGE_KEY:
         raise HTTPException(500, "OPENCAGE_API_KEY not configured")
 
     url = "https://api.opencagedata.com/geocode/v1/json"
-    params = {
-        "q": city,
-        "key": OPENCAGE_KEY,
-        "limit": 1,
-        "no_annotations": 0,
-    }
+    params = {"q": city, "key": OPENCAGE_KEY, "limit": 1, "no_annotations": 0}
 
     async with httpx.AsyncClient(timeout=10) as client:
         resp = await client.get(url, params=params)
@@ -120,17 +117,13 @@ async def geocode_city(city: str) -> dict:
 
 
 def local_to_utc(dob: str, tob: str, timezone_str: str) -> datetime:
-    """
-    Convert local birth date + time + timezone → UTC datetime (naive).
-    dob: "YYYY-MM-DD"
-    tob: "HH:MM"
-    """
+    """Convert local birth date + time + timezone → naive UTC datetime."""
     tz       = pytz.timezone(timezone_str)
     dt_str   = f"{dob} {tob}:00"
     local_dt = datetime.strptime(dt_str, "%Y-%m-%d %H:%M:%S")
     local_dt = tz.localize(local_dt)
     utc_dt   = local_dt.astimezone(pytz.utc)
-    return utc_dt.replace(tzinfo=None)   # naive UTC for pyswisseph
+    return utc_dt.replace(tzinfo=None)
 
 
 # ─── Routes ───────────────────────────────────────────────────────────────────
@@ -142,14 +135,7 @@ async def health():
 
 @app.post("/api/chart")
 async def create_chart(birth: BirthInput):
-    """
-    1. Geocode the place of birth
-    2. Convert local birth time → UTC
-    3. Calculate Vedic chart (D1, D9, D10)
-    4. Build full system prompt
-    5. Store session and return session_id + chart summary
-    """
-    # Geocode
+    """Geocode → UTC → Vedic chart → system prompt → return to client."""
     try:
         geo = await geocode_city(birth.pob)
     except HTTPException:
@@ -157,19 +143,16 @@ async def create_chart(birth: BirthInput):
     except Exception as e:
         raise HTTPException(400, f"Geocoding failed: {str(e)}")
 
-    # Convert to UTC
     try:
         birth_utc = local_to_utc(birth.dob, birth.tob, geo["timezone"])
     except Exception as e:
         raise HTTPException(400, f"Invalid date/time: {str(e)}")
 
-    # Calculate chart
     try:
         chart = calculate_chart(birth_utc, lat=geo["lat"], lon=geo["lng"])
     except Exception as e:
         raise HTTPException(500, f"Chart calculation failed: {str(e)}")
 
-    # Build system prompt
     try:
         system_prompt = build_system_prompt(
             chart,
@@ -180,7 +163,6 @@ async def create_chart(birth: BirthInput):
     except Exception as e:
         raise HTTPException(500, f"Prompt build failed: {str(e)}")
 
-    # Store session
     session_id = str(uuid.uuid4())
     SESSIONS[session_id] = {
         "system_prompt": system_prompt,
@@ -197,40 +179,39 @@ async def create_chart(birth: BirthInput):
         }
     }
 
-    # Build a clean summary to return to the UI
-    ct  = chart["core_trinity"]
-    d1  = chart["d1"]
+    ct = chart["core_trinity"]
 
-    summary = {
-        "session_id":    session_id,
-        # ── Stateless fix: return system_prompt so the client can ──────────
-        # re-send it on every /api/ask request. This survives server restarts.
-        "system_prompt": system_prompt,
-        "name":          birth.name or "Friend",
-        "ascendant":     ct["ascendant"]["sign"],
-        "asc_nakshatra": ct["ascendant"]["nakshatra"],
-        "asc_pada":      ct["ascendant"]["pada"],
-        "sun_sign":      ct["sun"]["sign"],
-        "moon_sign":     ct["moon"]["sign"],
+    return {
+        "session_id":     session_id,
+        "system_prompt":  system_prompt,
+        "name":           birth.name or "Friend",
+        "ascendant":      ct["ascendant"]["sign"],
+        "asc_nakshatra":  ct["ascendant"]["nakshatra"],
+        "asc_pada":       ct["ascendant"]["pada"],
+        "sun_sign":       ct["sun"]["sign"],
+        "moon_sign":      ct["moon"]["sign"],
         "moon_nakshatra": ct["moon"]["nakshatra"],
-        "moon_pada":     ct["moon"]["pada"],
-        "location":      geo["formatted_address"],
-        "timezone":      geo["timezone"],
-        "language":      birth.language,
+        "moon_pada":      ct["moon"]["pada"],
+        "location":       geo["formatted_address"],
+        "timezone":       geo["timezone"],
+        "language":       birth.language,
     }
-    return summary
 
 
 @app.post("/api/ask")
 async def ask_question(req: AskInput):
     """
-    Streaming endpoint.
-    Takes session_id + user question + conversation history.
-    Returns Server-Sent Events with Claude's streamed response.
+    Streaming endpoint with prompt caching.
+
+    TOKEN SAVINGS:
+    - System prompt (~20k tokens) is sent as a cacheable content block.
+    - Anthropic caches it for 5 minutes server-side.
+    - From the 2nd request onwards, only the new question tokens are billed
+      as input tokens — ~90% reduction for most users.
+    - Cache writes cost 1.25x, but cache reads cost only 0.1x, so break-even
+      is on the very first repeated call.
     """
-    # ── Stateless mode: client sends system_prompt directly ──────────────
-    # This survives container restarts (e.g. Railway deploys).
-    # Fall back to in-memory SESSIONS cache for older clients.
+    # Resolve system prompt
     if req.system_prompt:
         system_prompt = req.system_prompt
     elif req.session_id and req.session_id in SESSIONS:
@@ -238,7 +219,7 @@ async def ask_question(req: AskInput):
     else:
         raise HTTPException(404, "Session not found. Please re-enter birth details.")
 
-    # ── Inject language instruction at the top of the system prompt ───────
+    # Language injection
     language = req.language or "English"
     if language and language.lower() != "english":
         lang_instruction = (
@@ -248,10 +229,27 @@ async def ask_question(req: AskInput):
         )
         system_prompt = lang_instruction + system_prompt
 
+    # ── Planetary reference mode ────────────────────────────────────────
+    # When include_references=False the model sees the FULL chart data and
+    # bases its answer on it, but must not surface any astrological jargon
+    # in the response. The user gets plain practical guidance only.
+    if not req.include_references:
+        system_prompt += (
+            "\n\nDISPLAY INSTRUCTION (MANDATORY): Answer the user's question "
+            "using the complete chart knowledge above, but do NOT mention any "
+            "specific planet names (Sun, Moon, Mars, etc.), sign names (Aries, "
+            "Scorpio, etc.), house numbers, nakshatra names, dasha period names, "
+            "yoga names, or any other astrological terminology in your response. "
+            "Translate every insight into plain observations about the person's "
+            "personality, tendencies, patterns, and practical guidance. "
+            "Write as if you are a wise counsellor who just happens to understand "
+            "this person deeply — no astrology-speak at all."
+        )
+
     if not ANTHROPIC_KEY:
         raise HTTPException(500, "ANTHROPIC_API_KEY not configured")
 
-    # Build messages array — include history + new question
+    # Build messages array
     messages = []
     for msg in req.history:
         if msg.get("role") in ("user", "assistant") and msg.get("content"):
@@ -262,12 +260,26 @@ async def ask_question(req: AskInput):
         headers = {
             "x-api-key":         ANTHROPIC_KEY,
             "anthropic-version": "2023-06-01",
+            # Prompt caching beta — reduces repeated input tokens by ~90%
+            "anthropic-beta":    "prompt-caching-2024-07-31",
             "content-type":      "application/json",
         }
+
+        # System sent as a content array so cache_control can be attached.
+        # Anthropic will cache this block for 5 minutes. Subsequent requests
+        # from any process sharing the same API key will hit the cache.
+        system_content = [
+            {
+                "type": "text",
+                "text": system_prompt,
+                "cache_control": {"type": "ephemeral"},
+            }
+        ]
+
         payload = {
             "model":      CLAUDE_MODEL,
             "max_tokens": MAX_TOKENS,
-            "system":     system_prompt,
+            "system":     system_content,
             "messages":   messages,
             "stream":     True,
         }
@@ -282,8 +294,7 @@ async def ask_question(req: AskInput):
                 ) as response:
                     if response.status_code != 200:
                         body = await response.aread()
-                        error_msg = body.decode()
-                        yield f"data: {json.dumps({'error': error_msg})}\n\n"
+                        yield f"data: {json.dumps({'error': body.decode()})}\n\n"
                         return
 
                     async for line in response.aiter_lines():
@@ -316,7 +327,7 @@ async def ask_question(req: AskInput):
                             break
 
         except httpx.ReadTimeout:
-            yield f"data: {json.dumps({'error': 'Claude response timed out. Please try again.'})}\n\n"
+            yield f"data: {json.dumps({'error': 'Response timed out. Please try again.'})}\n\n"
         except Exception as e:
             yield f"data: {json.dumps({'error': str(e)})}\n\n"
 
@@ -324,7 +335,7 @@ async def ask_question(req: AskInput):
         stream_claude(),
         media_type="text/event-stream",
         headers={
-            "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",     # important for nginx proxies
+            "Cache-Control":     "no-cache",
+            "X-Accel-Buffering": "no",
         }
     )
