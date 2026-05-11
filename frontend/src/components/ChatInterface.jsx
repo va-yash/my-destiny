@@ -3,7 +3,6 @@ import { useState, useRef, useEffect, useCallback } from 'react'
 const API = import.meta.env.VITE_API_URL || ''
 
 // ─── Simple markdown → styled text renderer ──────────────────────────────────
-// Handles **bold**, *italic*, `code`, ### headings, — dividers
 
 function renderMarkdown(text) {
   const lines = text.split('\n')
@@ -13,7 +12,6 @@ function renderMarkdown(text) {
   while (i < lines.length) {
     const line = lines[i]
 
-    // Horizontal rule (━ or — or ---)
     if (/^[━─—\-]{3,}$/.test(line.trim())) {
       elements.push(
         <hr key={i} style={{
@@ -25,7 +23,6 @@ function renderMarkdown(text) {
       i++; continue
     }
 
-    // Headings
     const h3Match = line.match(/^###\s+(.+)/)
     const h2Match = line.match(/^##\s+(.+)/)
     const h1Match = line.match(/^#\s+(.+)/)
@@ -47,13 +44,11 @@ function renderMarkdown(text) {
       i++; continue
     }
 
-    // Empty line → spacing
     if (!line.trim()) {
       elements.push(<div key={i} style={{ height: '10px' }} />)
       i++; continue
     }
 
-    // Bullet
     if (line.match(/^[\-\*•]\s+/)) {
       const content = line.replace(/^[\-\*•]\s+/, '')
       elements.push(
@@ -68,7 +63,6 @@ function renderMarkdown(text) {
       i++; continue
     }
 
-    // Normal paragraph line
     elements.push(
       <span key={i}>
         {inlineFormat(line)}
@@ -82,7 +76,6 @@ function renderMarkdown(text) {
 }
 
 function inlineFormat(text) {
-  // Split on **bold**, *italic*, `code`
   const parts = []
   const re = /(\*\*([^*]+)\*\*|\*([^*]+)\*|`([^`]+)`)/g
   let last = 0, m
@@ -133,7 +126,6 @@ function MessageBubble({ msg, isStreaming }) {
     }}>
       <style>{`@keyframes fadeUp { from { opacity:0; transform:translateY(8px) } to { opacity:1; transform:translateY(0) } }`}</style>
 
-      {/* Avatar — Jyotishi side */}
       {!isUser && (
         <div style={{
           width: '32px', height: '32px', flexShrink: 0,
@@ -149,9 +141,7 @@ function MessageBubble({ msg, isStreaming }) {
 
       <div style={{
         maxWidth: isUser ? '55%' : '80%',
-        background: isUser
-          ? 'var(--msg-user-bg)'
-          : 'var(--msg-ai-bg)',
+        background: isUser ? 'var(--msg-user-bg)' : 'var(--msg-ai-bg)',
         border: `1px solid ${isUser ? 'rgba(201,168,76,0.3)' : 'rgba(180,155,100,0.12)'}`,
         borderRadius: isUser ? '16px 4px 16px 16px' : '4px 16px 16px 16px',
         padding: '14px 18px',
@@ -182,6 +172,75 @@ function MessageBubble({ msg, isStreaming }) {
   )
 }
 
+// ─── Planetary reference toggle ───────────────────────────────────────────────
+function ReferenceToggle({ value, onChange }) {
+  return (
+    <div style={{
+      display: 'flex',
+      alignItems: 'center',
+      gap: '10px',
+      background: 'rgba(18,21,42,0.6)',
+      border: '1px solid rgba(180,155,100,0.18)',
+      borderRadius: '24px',
+      padding: '5px 6px 5px 14px',
+      backdropFilter: 'blur(8px)',
+    }}>
+      <span style={{
+        fontFamily: 'var(--font-mono)',
+        fontSize: '11px',
+        letterSpacing: '0.08em',
+        color: 'var(--text-dim)',
+        whiteSpace: 'nowrap',
+      }}>
+        Planetary refs
+      </span>
+
+      {/* Toggle pill */}
+      <button
+        onClick={() => onChange(!value)}
+        title={value ? 'Showing planetary references — click to hide' : 'Hiding planetary references — click to show'}
+        style={{
+          position: 'relative',
+          width: '52px',
+          height: '26px',
+          borderRadius: '13px',
+          border: 'none',
+          cursor: 'pointer',
+          background: value
+            ? 'linear-gradient(135deg, rgba(201,168,76,0.45), rgba(201,168,76,0.25))'
+            : 'rgba(255,255,255,0.06)',
+          transition: 'background 0.25s',
+          flexShrink: 0,
+          boxShadow: value ? '0 0 8px rgba(201,168,76,0.25)' : 'none',
+        }}
+      >
+        <span style={{
+          position: 'absolute',
+          top: '3px',
+          left: value ? '29px' : '3px',
+          width: '20px',
+          height: '20px',
+          borderRadius: '50%',
+          background: value ? 'var(--gold)' : 'rgba(255,255,255,0.3)',
+          transition: 'left 0.25s, background 0.25s',
+          boxShadow: '0 1px 4px rgba(0,0,0,0.3)',
+        }} />
+      </button>
+
+      <span style={{
+        fontFamily: 'var(--font-mono)',
+        fontSize: '11px',
+        letterSpacing: '0.06em',
+        color: value ? 'var(--gold)' : 'var(--text-muted)',
+        minWidth: '32px',
+        transition: 'color 0.2s',
+      }}>
+        {value ? 'ON' : 'OFF'}
+      </span>
+    </div>
+  )
+}
+
 // ─── Suggested questions ──────────────────────────────────────────────────────
 const SUGGESTIONS = [
   "What are my core strengths and shadow traits?",
@@ -194,25 +253,58 @@ const SUGGESTIONS = [
 
 // ─── Main Chat Interface ──────────────────────────────────────────────────────
 export default function ChatInterface({ session, onReset }) {
-  const [messages, setMessages]   = useState([])
-  const [input, setInput]         = useState('')
-  const [streaming, setStreaming] = useState(false)
-  const [error, setError]         = useState('')
-  const scrollRef  = useRef(null)
-  const inputRef   = useRef(null)
-  const abortRef   = useRef(null)
+  const [messages, setMessages]           = useState([])
+  const [input, setInput]                 = useState('')
+  const [streaming, setStreaming]         = useState(false)
+  const [error, setError]                 = useState('')
+  const [includeRefs, setIncludeRefs]     = useState(true)
 
-  // Auto-scroll on new messages
-  useEffect(() => {
-    if (scrollRef.current) {
+  const scrollRef    = useRef(null)
+  const inputRef     = useRef(null)
+  const abortRef     = useRef(null)
+  // Track whether user has manually scrolled up during streaming
+  const userScrolled = useRef(false)
+
+  // ── Scroll helpers ─────────────────────────────────────────────────────────
+  const isNearBottom = () => {
+    if (!scrollRef.current) return true
+    const { scrollTop, scrollHeight, clientHeight } = scrollRef.current
+    return scrollHeight - scrollTop - clientHeight < 120
+  }
+
+  const scrollToBottom = (force = false) => {
+    if (!scrollRef.current) return
+    if (force || !userScrolled.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight
+    }
+  }
+
+  // Detect when user manually scrolls up (only matters during streaming)
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    const handleScroll = () => {
+      if (streaming && !isNearBottom()) {
+        userScrolled.current = true
+      } else if (isNearBottom()) {
+        userScrolled.current = false
+      }
+    }
+    el.addEventListener('scroll', handleScroll, { passive: true })
+    return () => el.removeEventListener('scroll', handleScroll)
+  }, [streaming])
+
+  // Auto-scroll during streaming only if user hasn't scrolled away
+  useEffect(() => {
+    if (streaming) {
+      scrollToBottom(false)   // respects userScrolled
     }
   }, [messages])
 
   // Opening message
   useEffect(() => {
-    const name = session.name && session.name !== 'Friend' ? session.name : 'you'
-    const openingText = `Namaste. I have your complete birth chart before me.\n\n` +
+    const openingText =
+      `Namaste. I have your complete birth chart before me.\n\n` +
       `Your Ascendant is **${session.ascendant}** — ` +
       `your soul walks in through the nakshatra of **${session.asc_nakshatra}**. ` +
       `Your Moon rests in **${session.moon_sign}** in **${session.moon_nakshatra}**, ` +
@@ -233,6 +325,9 @@ export default function ChatInterface({ session, onReset }) {
     setMessages(prev => [...prev, userMsg])
     setInput('')
     setStreaming(true)
+    // User just sent — always snap to bottom and reset scroll flag
+    userScrolled.current = false
+    setTimeout(() => scrollToBottom(true), 50)
 
     // Placeholder assistant message
     setMessages(prev => [...prev, { role: 'assistant', content: '' }])
@@ -246,13 +341,12 @@ export default function ChatInterface({ session, onReset }) {
         headers: { 'Content-Type': 'application/json' },
         signal: controller.signal,
         body: JSON.stringify({
-          session_id:    session.session_id,
-          // Stateless fix: send system_prompt back so the server never needs
-          // to look it up from the in-memory store (survives restarts).
-          system_prompt: session.system_prompt || '',
-          question:      text.trim(),
+          session_id:         session.session_id,
+          system_prompt:      session.system_prompt || '',
+          question:           text.trim(),
           history,
-          language:      session.language || 'English',
+          language:           session.language || 'English',
+          include_references: includeRefs,
         }),
       })
 
@@ -261,7 +355,7 @@ export default function ChatInterface({ session, onReset }) {
         throw new Error(err.detail || 'Request failed')
       }
 
-      const reader = res.body.getReader()
+      const reader  = res.body.getReader()
       const decoder = new TextDecoder()
       let buffer = ''
 
@@ -271,7 +365,7 @@ export default function ChatInterface({ session, onReset }) {
 
         buffer += decoder.decode(value, { stream: true })
         const lines = buffer.split('\n')
-        buffer = lines.pop() // keep incomplete last line
+        buffer = lines.pop()
 
         for (const line of lines) {
           if (!line.startsWith('data: ')) continue
@@ -306,8 +400,9 @@ export default function ChatInterface({ session, onReset }) {
       }
     } finally {
       setStreaming(false)
+      userScrolled.current = false
     }
-  }, [messages, streaming, session])
+  }, [messages, streaming, session, includeRefs])
 
   function handleKeyDown(e) {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -333,7 +428,7 @@ export default function ChatInterface({ session, onReset }) {
 
       {/* ── Header ─────────────────────────────────────────────────────── */}
       <header style={{
-        padding: '20px 28px',
+        padding: '16px 28px',
         borderBottom: '1px solid var(--border)',
         background: 'var(--chat-bg)',
         backdropFilter: 'blur(16px)',
@@ -341,8 +436,11 @@ export default function ChatInterface({ session, onReset }) {
         alignItems: 'center',
         justifyContent: 'space-between',
         flexShrink: 0,
+        gap: '16px',
+        flexWrap: 'wrap',
       }}>
-        <div>
+        {/* Left: chart identity */}
+        <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{
             fontFamily: 'var(--font-display)',
             fontSize: '11px',
@@ -352,7 +450,7 @@ export default function ChatInterface({ session, onReset }) {
             marginBottom: '4px',
             opacity: 0.8,
           }}>
-            Jyotish AI ☽
+            Astro-gyaani ☽
           </div>
           <div style={{
             fontFamily: 'var(--font-display)',
@@ -363,11 +461,7 @@ export default function ChatInterface({ session, onReset }) {
           }}>
             {session.name && session.name !== 'Friend' ? session.name : 'Your Chart'}
           </div>
-          <div style={{
-            display: 'flex',
-            gap: '14px',
-            marginTop: '4px',
-          }}>
+          <div style={{ display: 'flex', gap: '14px', marginTop: '4px' }}>
             {[
               `☉ ${session.sun_sign}`,
               `☽ ${session.moon_sign}`,
@@ -385,6 +479,10 @@ export default function ChatInterface({ session, onReset }) {
           </div>
         </div>
 
+        {/* Centre: planetary reference toggle */}
+        <ReferenceToggle value={includeRefs} onChange={setIncludeRefs} />
+
+        {/* Right: new chart */}
         <button
           onClick={onReset}
           style={{
@@ -398,6 +496,7 @@ export default function ChatInterface({ session, onReset }) {
             cursor: 'pointer',
             transition: 'all 0.2s',
             letterSpacing: '0.05em',
+            flexShrink: 0,
           }}
           onMouseEnter={e => {
             e.currentTarget.style.borderColor = 'var(--gold-dim)'
@@ -432,7 +531,6 @@ export default function ChatInterface({ session, onReset }) {
           />
         ))}
 
-        {/* Suggested questions — shown only at start */}
         {showSuggestions && !streaming && (
           <div style={{ marginTop: '20px' }}>
             <div style={{
@@ -446,11 +544,7 @@ export default function ChatInterface({ session, onReset }) {
             }}>
               Explore your chart
             </div>
-            <div style={{
-              display: 'flex',
-              flexWrap: 'wrap',
-              gap: '10px',
-            }}>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px' }}>
               {SUGGESTIONS.map(s => (
                 <button
                   key={s}
@@ -486,7 +580,6 @@ export default function ChatInterface({ session, onReset }) {
           </div>
         )}
 
-        {/* Error banner */}
         {error && (
           <div style={{
             background: 'rgba(196,106,106,0.1)',
