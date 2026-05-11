@@ -47,7 +47,7 @@ export default function Navbar({ page, onNavigate, darkMode, onToggleDark }) {
             padding: 0,
           }}
         >
-          Jyotish AI ☽
+          Astro-gyaani ☽
         </button>
 
         <span style={{ color: 'var(--border)', fontSize: '14px', opacity: 0.6 }}>|</span>
@@ -62,7 +62,7 @@ export default function Navbar({ page, onNavigate, darkMode, onToggleDark }) {
         </button>
 
         <a
-          href="mailto:feedback@jyotishai.app"
+          href="mailto:feedback@astrogyaani.app"
           style={{
             ...linkStyle(false),
             textDecoration: 'underline',
