@@ -178,21 +178,21 @@ function ReferenceToggle({ value, onChange }) {
     <div style={{
       display: 'flex',
       alignItems: 'center',
-      gap: '10px',
+      gap: '7px',
       background: 'rgba(18,21,42,0.6)',
       border: '1px solid rgba(180,155,100,0.18)',
-      borderRadius: '24px',
-      padding: '5px 6px 5px 14px',
+      borderRadius: '20px',
+      padding: '4px 5px 4px 10px',
       backdropFilter: 'blur(8px)',
     }}>
       <span style={{
         fontFamily: 'var(--font-mono)',
-        fontSize: '11px',
-        letterSpacing: '0.08em',
+        fontSize: '10px',
+        letterSpacing: '0.06em',
         color: 'var(--text-dim)',
         whiteSpace: 'nowrap',
       }}>
-        Planetary refs
+        Refs
       </span>
 
       {/* Toggle pill */}
@@ -201,9 +201,9 @@ function ReferenceToggle({ value, onChange }) {
         title={value ? 'Showing planetary references — click to hide' : 'Hiding planetary references — click to show'}
         style={{
           position: 'relative',
-          width: '52px',
-          height: '26px',
-          borderRadius: '13px',
+          width: '40px',
+          height: '22px',
+          borderRadius: '11px',
           border: 'none',
           cursor: 'pointer',
           background: value
@@ -217,9 +217,9 @@ function ReferenceToggle({ value, onChange }) {
         <span style={{
           position: 'absolute',
           top: '3px',
-          left: value ? '29px' : '3px',
-          width: '20px',
-          height: '20px',
+          left: value ? '21px' : '3px',
+          width: '16px',
+          height: '16px',
           borderRadius: '50%',
           background: value ? 'var(--gold)' : 'rgba(255,255,255,0.3)',
           transition: 'left 0.25s, background 0.25s',
@@ -229,10 +229,10 @@ function ReferenceToggle({ value, onChange }) {
 
       <span style={{
         fontFamily: 'var(--font-mono)',
-        fontSize: '11px',
+        fontSize: '10px',
         letterSpacing: '0.06em',
         color: value ? 'var(--gold)' : 'var(--text-muted)',
-        minWidth: '32px',
+        minWidth: '24px',
         transition: 'color 0.2s',
       }}>
         {value ? 'ON' : 'OFF'}
@@ -320,7 +320,7 @@ export default function ChatInterface({ session, onReset }) {
     setError('')
 
     const userMsg = { role: 'user', content: text.trim() }
-    const history = messages.map(m => ({ role: m.role, content: m.content }))
+    const history = messages.slice(-8).map(m => ({ role: m.role, content: m.content }))
 
     setMessages(prev => [...prev, userMsg])
     setInput('')
@@ -428,7 +428,7 @@ export default function ChatInterface({ session, onReset }) {
 
       {/* ── Header ─────────────────────────────────────────────────────── */}
       <header style={{
-        padding: '16px 28px',
+        padding: '10px 16px',
         borderBottom: '1px solid var(--border)',
         background: 'var(--chat-bg)',
         backdropFilter: 'blur(16px)',
@@ -436,32 +436,24 @@ export default function ChatInterface({ session, onReset }) {
         alignItems: 'center',
         justifyContent: 'space-between',
         flexShrink: 0,
-        gap: '16px',
-        flexWrap: 'wrap',
+        gap: '10px',
+        flexWrap: 'nowrap',
       }}>
         {/* Left: chart identity */}
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{
             fontFamily: 'var(--font-display)',
-            fontSize: '11px',
-            letterSpacing: '0.2em',
-            textTransform: 'uppercase',
-            color: 'var(--gold)',
-            marginBottom: '4px',
-            opacity: 0.8,
-          }}>
-            Astro-gyaani ☽
-          </div>
-          <div style={{
-            fontFamily: 'var(--font-display)',
-            fontSize: '22px',
+            fontSize: '16px',
             fontWeight: 400,
             color: 'var(--cream)',
             letterSpacing: '0.02em',
+            whiteSpace: 'nowrap',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
           }}>
             {session.name && session.name !== 'Friend' ? session.name : 'Your Chart'}
           </div>
-          <div style={{ display: 'flex', gap: '14px', marginTop: '4px' }}>
+          <div style={{ display: 'flex', gap: '10px', marginTop: '2px', flexWrap: 'wrap' }}>
             {[
               `☉ ${session.sun_sign}`,
               `☽ ${session.moon_sign}`,
@@ -469,9 +461,9 @@ export default function ChatInterface({ session, onReset }) {
             ].map(tag => (
               <span key={tag} style={{
                 fontFamily: 'var(--font-mono)',
-                fontSize: '11px',
+                fontSize: '10px',
                 color: 'var(--text-dim)',
-                letterSpacing: '0.06em',
+                letterSpacing: '0.05em',
               }}>
                 {tag}
               </span>
@@ -491,11 +483,11 @@ export default function ChatInterface({ session, onReset }) {
             borderRadius: '8px',
             color: 'var(--text-dim)',
             fontFamily: 'var(--font-body)',
-            fontSize: '13px',
-            padding: '8px 14px',
+            fontSize: '12px',
+            padding: '6px 10px',
             cursor: 'pointer',
             transition: 'all 0.2s',
-            letterSpacing: '0.05em',
+            letterSpacing: '0.04em',
             flexShrink: 0,
           }}
           onMouseEnter={e => {
@@ -517,7 +509,7 @@ export default function ChatInterface({ session, onReset }) {
         style={{
           flex: 1,
           overflowY: 'auto',
-          padding: '28px',
+          padding: '16px',
           display: 'flex',
           flexDirection: 'column',
           gap: '8px',
@@ -597,7 +589,7 @@ export default function ChatInterface({ session, onReset }) {
 
       {/* ── Input bar ──────────────────────────────────────────────────── */}
       <div style={{
-        padding: '16px 28px 24px',
+        padding: '12px 16px 18px',
         borderTop: '1px solid var(--border)',
         background: 'var(--chat-bg)',
         backdropFilter: 'blur(16px)',
