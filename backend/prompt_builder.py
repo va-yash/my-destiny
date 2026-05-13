@@ -218,39 +218,39 @@ def _elapsed_pct(p: dict, query_date: datetime) -> float:
 
 def format_dasha_block(sequence: list[dict], query_date: datetime) -> str:
     """
-    Render complete dasha output for the Claude system prompt.
+    Render dasha output for the Claude system prompt.
     Shows:
-      1. Current active dasha — all 5 levels with precise timestamps
+      1. Current active dasha — MD / AD / PD chain
       2. Full Antardasha breakdown of the active Mahadasha
       3. Full Pratyantar breakdown of the active Antardasha
       4. Upcoming MD transitions
       5. All 9 Mahadashas (birth → end of sequence)
+
+    SD / Prana levels are omitted to keep the prompt lean.
     """
     active = get_active_dasha(sequence, query_date)
     lines  = []
 
-    # ── 1. Current active dasha chain ────────────────────────────────────
-    lines.append("CURRENT DASHA TIMELINE (precise to the second)")
+    # ── 1. Current active dasha chain (MD / AD / PD only) ────────────────
+    lines.append("CURRENT DASHA TIMELINE")
     lines.append("─" * 56)
 
     level_labels = [
         ("Mahadasha  ", "md"),
         ("Antardasha ", "ad"),
         ("Pratyantar ", "pd"),
-        ("Sookshma   ", "sd"),
-        ("Prana      ", "prana"),
     ]
     for label, key in level_labels:
         p = active.get(key)
         if p:
-            pct  = _elapsed_pct(p, query_date)
-            bar  = _bar(pct)
+            pct      = _elapsed_pct(p, query_date)
+            bar      = _bar(pct)
             days_left = int((p["end"] - query_date).total_seconds() / 86400)
             lines.append(
                 f"  {label}: {p['lord']:<10} "
-                f"{_fmt(p['start'], True)}  →  {_fmt(p['end'], True)}"
+                f"{_fmt(p['start'])}  →  {_fmt(p['end'])}"
             )
-            lines.append(f"             {bar} {pct*100:.1f}% elapsed  |  {days_left} days remaining")
+            lines.append(f"             {bar} {pct*100:.1f}%  |  {days_left}d left")
         else:
             lines.append(f"  {label}: —")
 
@@ -261,17 +261,17 @@ def format_dasha_block(sequence: list[dict], query_date: datetime) -> str:
     if md:
         lines.append(f"ALL ANTARDASHAS IN {md['lord'].upper()} MAHADASHA")
         lines.append("─" * 56)
-        lines.append(f"  {'Lord':<10} {'Start':<24} {'End':<24} {'Duration':>10}")
-        lines.append("  " + "─" * 72)
+        lines.append(f"  {'Lord':<10} {'Start':<16} {'End':<16} {'Dur':>7}")
+        lines.append("  " + "─" * 52)
         for ad in md["antardashas"]:
-            marker = " ◀ ACTIVE" if (active.get("ad") and ad["lord"] == active["ad"]["lord"]
-                                      and ad["start"] == active["ad"]["start"]) else ""
+            marker   = " ◀ ACTIVE" if (active.get("ad") and ad["lord"] == active["ad"]["lord"]
+                                        and ad["start"] == active["ad"]["start"]) else ""
             dur_days = (ad["end"] - ad["start"]).days
             lines.append(
                 f"  {ad['lord']:<10} "
-                f"{_fmt(ad['start'], True):<24} "
-                f"{_fmt(ad['end'], True):<24} "
-                f"{dur_days:>7}d{marker}"
+                f"{_fmt(ad['start']):<16} "
+                f"{_fmt(ad['end']):<16} "
+                f"{dur_days:>5}d{marker}"
             )
         lines.append("")
 
@@ -280,71 +280,39 @@ def format_dasha_block(sequence: list[dict], query_date: datetime) -> str:
     if ad and ad.get("sub"):
         lines.append(f"ALL PRATYANTARS IN {md['lord'].upper()}/{ad['lord'].upper()} ANTARDASHA")
         lines.append("─" * 56)
-        lines.append(f"  {'Lord':<10} {'Start':<24} {'End':<24} {'Duration':>10}")
-        lines.append("  " + "─" * 72)
+        lines.append(f"  {'Lord':<10} {'Start':<16} {'End':<16} {'Dur':>7}")
+        lines.append("  " + "─" * 52)
         for pd in ad["sub"]:
-            marker = " ◀ ACTIVE" if (active.get("pd") and pd["lord"] == active["pd"]["lord"]
-                                      and pd["start"] == active["pd"]["start"]) else ""
+            marker   = " ◀ ACTIVE" if (active.get("pd") and pd["lord"] == active["pd"]["lord"]
+                                        and pd["start"] == active["pd"]["start"]) else ""
             dur_days = (pd["end"] - pd["start"]).days
             lines.append(
                 f"  {pd['lord']:<10} "
-                f"{_fmt(pd['start'], True):<24} "
-                f"{_fmt(pd['end'], True):<24} "
-                f"{dur_days:>7}d{marker}"
+                f"{_fmt(pd['start']):<16} "
+                f"{_fmt(pd['end']):<16} "
+                f"{dur_days:>5}d{marker}"
             )
         lines.append("")
 
-    # ── 4. Active PD — all Sookshma Dashas ──────────────────────────────
-    pd = active.get("pd")
-    if pd and pd.get("sub"):
-        lines.append(f"ALL SOOKSHMAS IN {md['lord'].upper()}/{ad['lord'].upper()}/{pd['lord'].upper()} PRATYANTAR")
-        lines.append("─" * 56)
-        for sd in pd["sub"]:
-            marker = " ◀" if (active.get("sd") and sd["lord"] == active["sd"]["lord"]
-                               and sd["start"] == active["sd"]["start"]) else ""
-            hrs = int((sd["end"] - sd["start"]).total_seconds() / 3600)
-            lines.append(
-                f"  {sd['lord']:<10} "
-                f"{_fmt(sd['start'], True)} → {_fmt(sd['end'], True)} "
-                f"({hrs}h){marker}"
-            )
-        lines.append("")
-
-    # ── 5. Active SD — all Prana Dashas ─────────────────────────────────
-    sd = active.get("sd")
-    if sd and sd.get("sub"):
-        lines.append(f"ALL PRANAS IN {md['lord'].upper()}/{ad['lord'].upper()}/{pd['lord'].upper()}/{sd['lord'].upper()} SOOKSHMA")
-        lines.append("─" * 56)
-        for prana in sd["sub"]:
-            marker = " ◀" if (active.get("prana") and prana["lord"] == active["prana"]["lord"]
-                               and prana["start"] == active["prana"]["start"]) else ""
-            mins = int((prana["end"] - prana["start"]).total_seconds() / 60)
-            lines.append(
-                f"  {prana['lord']:<10} "
-                f"{_fmt(prana['start'], True)} → {_fmt(prana['end'], True)} "
-                f"({mins}m){marker}"
-            )
-        lines.append("")
-
-    # ── 6. Upcoming MD transitions ───────────────────────────────────────
+    # ── 4. Upcoming MD transitions ───────────────────────────────────────
     upcoming = [p for p in sequence if p["start"] > query_date][:3]
     if upcoming:
         lines.append("UPCOMING MAHADASHA TRANSITIONS")
         lines.append("─" * 56)
         for p in upcoming:
             days_away = (p["start"] - query_date).days
-            lines.append(f"  → {p['lord']:<10} begins {_fmt(p['start'], True)}  ({days_away} days away)")
+            lines.append(f"  → {p['lord']:<10} begins {_fmt(p['start'])}  ({days_away}d away)")
         lines.append("")
 
-    # ── 7. Full MD sequence ──────────────────────────────────────────────
-    lines.append("FULL VIMSHOTTARI SEQUENCE (birth → cycle end)")
+    # ── 5. Full MD sequence ──────────────────────────────────────────────
+    lines.append("FULL VIMSHOTTARI SEQUENCE")
     lines.append("─" * 56)
     for p in sequence:
-        marker = " ◀ ACTIVE NOW" if (md and p["lord"] == md["lord"]
-                                      and p["start"] == md["start"]) else ""
+        marker = " ◀ NOW" if (md and p["lord"] == md["lord"]
+                               and p["start"] == md["start"]) else ""
         lines.append(
             f"  {p['lord']:<10} "
-            f"{_fmt(p['start'], True)}  →  {_fmt(p['end'], True)}"
+            f"{_fmt(p['start'])}  →  {_fmt(p['end'])}"
             f"{marker}"
         )
 
@@ -672,25 +640,66 @@ Never stop mid-thought. Every response must end with a complete sentence.
 """
 
 
+# ─── Query-aware divisional chart selector ───────────────────────────────────
+
+# Keywords that trigger loading an additional divisional chart.
+# D9 and D10 are always included; only extras listed here.
+_CHART_TRIGGERS: dict[str, list[str]] = {
+    "d3":  ["sibling", "brother", "sister", "courage", "valor"],
+    "d4":  ["property", "home", "land", "house", "vehicle", "car", "real estate", "fixed asset"],
+    "d5":  ["mantra", "ishta devata", "deity", "pooja"],
+    "d6":  ["health", "disease", "illness", "sick", "enemy", "debt", "competition", "legal"],
+    "d7":  ["child", "children", "son", "daughter", "pregnant", "pregnancy", "fertility", "baby"],
+    "d8":  ["accident", "sudden event", "longevity", "mystery", "obstacle"],
+    "d12": ["father", "mother", "parent", "ancestor", "lineage", "family background"],
+    "d16": ["vehicle", "conveyance", "travel luck", "comforts", "happiness"],
+    "d20": ["spiritual", "worship", "meditation", "devotion", "moksha", "liberation"],
+    "d24": ["education", "degree", "study", "college", "university", "learning", "knowledge"],
+    "d27": ["strength", "vitality", "resistance", "sport", "physical"],
+    "d30": ["misfortune", "struggle", "evil", "hardship"],
+    "d40": ["maternal", "mother's family", "maternal uncle", "matrilineal"],
+    "d45": ["paternal", "father's family", "patrilineal"],
+    "d60": ["past life", "karma", "fate", "destiny", "d60", "shashtiamsa", "shastiamsha",
+            "karmic debt", "previous birth", "soul purpose"],
+}
+
+
+def detect_extra_charts(query: str) -> list[str]:
+    """
+    Scan a user query and return the list of divisional chart keys
+    (beyond the default D9/D10) that are relevant.
+    """
+    q = query.lower()
+    extras: list[str] = []
+    for key, keywords in _CHART_TRIGGERS.items():
+        if any(kw in q for kw in keywords):
+            extras.append(key)
+    return extras
+
+
 # ─── Master builder ───────────────────────────────────────────────────────────
 
-def build_system_prompt(chart: dict, birth_dt: datetime, query_date: datetime = None, language: str = "English") -> str:
+def build_system_prompt(chart: dict, birth_dt: datetime, query_date: datetime = None,
+                        language: str = "English",
+                        extra_charts: list | None = None) -> str:
     """
     Build the complete Claude system prompt from a calculated chart.
 
     Parameters
     ----------
-    chart       : Output of vedic_calc.calculate_chart()
-    birth_dt    : Actual birth datetime in UTC (for dasha timing)
-    query_date  : Date for 'active dasha' calculation (default: now)
-    language    : Language for responses (default: English)
+    chart        : Output of vedic_calc.calculate_chart()
+    birth_dt     : Actual birth datetime in UTC (for dasha timing)
+    query_date   : Date for 'active dasha' calculation (default: now)
+    language     : Language for responses (default: English)
+    extra_charts : Additional divisional chart keys to include beyond
+                   the default D1 + D9 + D10.  e.g. ["d6", "d60"]
     """
     if query_date is None:
         query_date = datetime.utcnow()
 
     from vedic_calc import format_for_prompt
 
-    chart_block = format_for_prompt(chart)
+    chart_block = format_for_prompt(chart, extra_charts=extra_charts)
 
     # ── PRECISION FIX: use raw full-precision Moon longitude ──────────────
     # chart["raw_lons"]["Moon"] comes directly from pyswisseph with no rounding.
