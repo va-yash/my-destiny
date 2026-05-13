@@ -41,7 +41,7 @@ from pydantic import BaseModel
 from dotenv import load_dotenv
 
 from vedic_calc import calculate_chart
-from prompt_builder import build_system_prompt
+from prompt_builder import build_system_prompt, detect_extra_charts
 
 load_dotenv()
 
@@ -56,7 +56,7 @@ SESSIONS: dict[str, dict] = {}
 
 # ─── App setup ────────────────────────────────────────────────────────────────
 
-app = FastAPI(title="Astro-gyaani", version="1.0.0")
+app = FastAPI(title="My Destiny", version="2.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -165,18 +165,25 @@ async def create_chart(birth: BirthInput):
 
     session_id = str(uuid.uuid4())
     SESSIONS[session_id] = {
-        "system_prompt": system_prompt,
+        # Raw chart object — used to rebuild optimised system prompts per query
+        "chart":          chart,
+        "birth_dt":       birth_utc,
+        # Accumulates which extra divisional charts have been loaded this session
+        "loaded_charts":  set(),
+        # Minimal cached prompt (fallback if session is found but chart missing)
+        "system_prompt":  system_prompt,
         "birth_data": {
-            "name":    birth.name,
-            "dob":     birth.dob,
-            "tob":     birth.tob,
-            "pob":     geo["formatted_address"],
-            "gender":  birth.gender,
+            "name":     birth.name,
+            "dob":      birth.dob,
+            "tob":      birth.tob,
+            "pob":      geo["formatted_address"],
+            "gender":   birth.gender,
             "language": birth.language,
-            "lat":     geo["lat"],
-            "lng":     geo["lng"],
+            "lat":      geo["lat"],
+            "lng":      geo["lng"],
             "timezone": geo["timezone"],
-        }
+        },
+        "language": birth.language,
     }
 
     ct = chart["core_trinity"]
@@ -201,35 +208,46 @@ async def create_chart(birth: BirthInput):
 @app.post("/api/ask")
 async def ask_question(req: AskInput):
     """
-    Streaming endpoint with prompt caching.
+    Streaming endpoint with prompt caching + on-demand divisional charts.
 
-    TOKEN SAVINGS:
-    - System prompt (~20k tokens) is sent as a cacheable content block.
-    - Anthropic caches it for 5 minutes server-side.
-    - From the 2nd request onwards, only the new question tokens are billed
-      as input tokens — ~90% reduction for most users.
-    - Cache writes cost 1.25x, but cache reads cost only 0.1x, so break-even
-      is on the very first repeated call.
+    TOKEN OPTIMISATION (v4)
+    ─────────────────────────────────────────────────────
+    1. Base system prompt now includes only D1 + D9 + D10 (not all 19
+       divisional charts). Most questions only need these.
+    2. Additional divisional charts are injected on first mention and
+       kept loaded for the rest of the session (accumulated in SESSIONS).
+    3. SD/Prana dasha levels removed from prompt (saves ~350 tokens).
+    4. Prompt caching header keeps the system prompt cached for 5 minutes.
+    5. After the 1st request, input tokens drop ~80-90% on cache hits.
     """
-    # Resolve system prompt
-    if req.system_prompt:
+    language = req.language or "English"
+
+    # ── Resolve system prompt ────────────────────────────────────────────
+    session = SESSIONS.get(req.session_id) if req.session_id else None
+
+    if session and "chart" in session:
+        # ── Server-side optimised rebuild ────────────────────────────────
+        # Detect if the question needs additional divisional charts,
+        # accumulate them in the session so they stay loaded.
+        new_extras = detect_extra_charts(req.question)
+        session["loaded_charts"].update(new_extras)
+        extra_charts = list(session["loaded_charts"]) or None
+
+        system_prompt = build_system_prompt(
+            session["chart"],
+            session["birth_dt"],
+            query_date=datetime.utcnow(),
+            language=language,
+            extra_charts=extra_charts,
+        )
+    elif req.system_prompt:
         system_prompt = req.system_prompt
     elif req.session_id and req.session_id in SESSIONS:
         system_prompt = SESSIONS[req.session_id]["system_prompt"]
     else:
         raise HTTPException(404, "Session not found. Please re-enter birth details.")
 
-    # Language injection
-    language = req.language or "English"
-    if language and language.lower() != "english":
-        lang_instruction = (
-            f"LANGUAGE INSTRUCTION: You must respond entirely in {language}. "
-            f"All your answers, explanations, and astrological insights must be written in {language}. "
-            f"Do not mix languages — respond only in {language}.\n\n"
-        )
-        system_prompt = lang_instruction + system_prompt
-
-    # ── Planetary reference mode ────────────────────────────────────────
+    # ── Planetary reference mode ─────────────────────────────────────────────
     # When include_references=False the model sees the FULL chart data and
     # bases its answer on it, but must not surface any astrological jargon
     # in the response. The user gets plain practical guidance only.
