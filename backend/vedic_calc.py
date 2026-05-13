@@ -497,14 +497,25 @@ def akshavedamsa_sign(lon: float) -> tuple[int, str]:
 def shashtiamsa_sign(lon: float) -> tuple[int, str]:
     """
     D60 — Shashtiamsa. Sixty equal parts of 0°30' each.
-    Odd  signs: count from Aries (0).
-    Even signs: count from Libra (6).
+
+    Classical Parashari rule (BPHS):
+      Odd  signs (Aries, Gemini, Leo, Libra, Sagittarius, Aquarius):
+          count FORWARD  from Aries  — divisions 0-59 → (0  + part) % 12
+      Even signs (Taurus, Cancer, Virgo, Scorpio, Capricorn, Pisces):
+          count BACKWARD from Libra  — divisions 0-59 → (6  - part) % 12
+
+    In 0-indexed sign numbering, even indices (0,2,4,6,8,10) are the
+    traditionally ODD signs, so the condition is `sign_idx % 2 == 0`.
     """
     sign_idx = int(lon / 30) % 12
-    pos  = lon % 30
-    part = int(pos / 0.5)              # 0-59
-    start = 0 if sign_idx % 2 == 0 else 6   # Aries or Libra
-    d60  = (start + part) % 12
+    pos      = lon % 30
+    part     = int(pos / 0.5)          # 0-59
+
+    if sign_idx % 2 == 0:              # Odd sign  → forward from Aries
+        d60 = (0 + part) % 12
+    else:                              # Even sign → backward from Libra
+        d60 = (6 - part) % 12
+
     return d60, SIGNS[d60]
 
 
@@ -768,12 +779,22 @@ def _flags(p: dict) -> str:
     return " | ".join(parts) if parts else "—"
 
 
-def format_for_prompt(chart: dict) -> str:
+DEFAULT_PROMPT_CHARTS = {"d9", "d10"}   # always shown alongside D1
+
+
+def format_for_prompt(chart: dict, extra_charts: list | None = None) -> str:
     """
-    Render the full chart dict into a structured text block for Claude.
-    Includes D1 in full detail, then every divisional chart D2–D60
-    with its own ascendant and house numbers.
+    Render chart data into a structured text block for Claude.
+
+    D1 is always included in full detail.
+    D9 (Navamsa) and D10 (Dasamsa) are always included.
+    extra_charts: additional keys to include, e.g. ["d3", "d60"].
+
+    Keeping the prompt lean saves ~2 500 tokens vs dumping all 19 charts.
     """
+    include: set[str] = set(DEFAULT_PROMPT_CHARTS)
+    if extra_charts:
+        include.update(extra_charts)
     ct = chart["core_trinity"]
     d1 = chart["d1"]
     lines: list[str] = []
@@ -809,8 +830,10 @@ def format_for_prompt(chart: dict) -> str:
     lines.append("")
     lines.append("━" * 60)
 
-    # ── Divisional charts D2–D60 ──────────────────────────────────────────
+    # ── Divisional charts (only those in `include`) ───────────────────────
     for key in DIVISIONAL_CHARTS:
+        if key not in include:
+            continue
         num      = key.upper()
         fullname = DIVISIONAL_NAMES[key]
         purpose  = DIVISIONAL_PURPOSE[key]
