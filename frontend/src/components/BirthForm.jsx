@@ -179,7 +179,7 @@ export default function BirthForm({ onChartReady }) {
             lineHeight: 1.15,
             letterSpacing: '0.02em',
           }}>
-            Jyotish AI
+            My Destiny
           </h1>
           <p style={{
             marginTop: '12px',
@@ -188,8 +188,10 @@ export default function BirthForm({ onChartReady }) {
             fontSize: '15px',
             lineHeight: 1.6,
           }}>
-            Enter your birth details to receive a personalised<br />
-            Vedic astrology reading powered by classical Jyotish.
+            Your stars. Your story. Your destiny.<br />
+            <span style={{ fontSize: '13px', opacity: 0.75 }}>
+              Enter your birth details for a personalised Vedic chart reading.
+            </span>
           </p>
         </div>
 
