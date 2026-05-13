@@ -47,7 +47,7 @@ export default function Navbar({ page, onNavigate, darkMode, onToggleDark }) {
             padding: 0,
           }}
         >
-          Astro-gyaani ☽
+          My Destiny ☽
         </button>
 
         <span style={{ color: 'var(--border)', fontSize: '14px', opacity: 0.6 }}>|</span>
