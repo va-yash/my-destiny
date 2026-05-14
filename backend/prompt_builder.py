@@ -8,18 +8,30 @@ Entry point:
     from prompt_builder import build_system_prompt
     system_prompt = build_system_prompt(chart, birth_dt, query_date=datetime.utcnow())
 
-DASHA PRECISION (v2)
-────────────────────
-• Uses chart["raw_lons"]["Moon"] — the exact sidereal longitude straight from
-  pyswisseph (no rounding). This gives second-level timing accuracy.
-  Previously the code reconstructed Moon longitude from the rounded
-  chart["d1"]["Moon"]["degrees"] field, causing timing drift.
+CHANGELOG v3
+────────────
+• Added NATIVE DETAILS block (name, DOB, age, place) at the top of every
+  system prompt so Claude always knows when the native was born and how
+  old they are — critical context for dasha interpretation.
 
-• Days-per-year constant: 365.25 (Julian year) — the Vedic software standard.
+• format_dasha_block() now accepts birth_dt and annotates the birth-lord
+  Mahadasha in the Full Vimshottari Sequence with its balance at birth
+  e.g. "Moon … [balance at birth: 7y 0m]".  This prevents Claude from
+  treating a pre-birth dasha start date as meaningful.
 
-• Depth: Mahadasha → Antardasha → Pratyantar Dasha → Sookshma Dasha → Prana Dasha
-  All five levels are computed for the currently active period.
-  Full MD+AD tables are computed for all 9 mahadashas.
+• Removed the full Pratyantar Dasha table from the prompt (section 3).
+  The active PD is still shown in the current-chain block.  Saving
+  ~300-400 tokens per call without losing interpretive value.
+
+• build_system_prompt() accepts an optional birth_details dict
+  {name, dob, tob, pob} passed from main.py.
+
+DASHA PRECISION (v2 unchanged)
+────────────────────────────────
+• Uses chart["raw_lons"]["Moon"] — exact sidereal longitude from pyswisseph.
+• Days-per-year constant: 365.25 (Julian year).
+• Depth: Mahadasha → Antardasha → Pratyantar Dasha → Sookshma → Prana
+  (all computed internally; only MD+AD+active-PD shown in prompt).
 """
 
 from datetime import datetime, timedelta
@@ -44,9 +56,9 @@ NAK_DASHA_LORD = [
     "Jupiter", "Saturn", "Mercury"
 ]
 
-NAK_SIZE    = 360.0 / 27      # 13.3333...°
-TOTAL_YEARS = 120.0
-DAYS_PER_YEAR = 365.25        # Julian year — Vedic standard
+NAK_SIZE      = 360.0 / 27      # 13.3333...°
+TOTAL_YEARS   = 120.0
+DAYS_PER_YEAR = 365.25          # Julian year — Vedic standard
 
 
 # ─── Core timing function ─────────────────────────────────────────────────────
@@ -55,7 +67,6 @@ def _add_years(dt: datetime, years: float) -> datetime:
     """
     Add fractional years to a datetime with sub-second precision.
     Uses Julian year (365.25 days) — the Vedic astrology standard.
-    timedelta accepts fractional days, giving microsecond resolution.
     """
     return dt + timedelta(days=years * DAYS_PER_YEAR)
 
@@ -71,11 +82,10 @@ def _dasha_periods(start_dt: datetime, start_lord_idx: int, parent_years: float,
     ----------
     start_dt        : exact start datetime of this level's first period
     start_lord_idx  : DASHA_ORDER index of the first lord at this level
-    parent_years    : the parent period's total years (used to compute sub-duration)
+    parent_years    : the parent period's total years
     depth           : 1=AD, 2=PD, 3=SD, 4=Prana
 
     Returns list of dicts: {lord, start, end, years}
-    The last level (depth 4 = Prana) has no children.
     """
     periods = []
     cur = start_dt
@@ -97,35 +107,20 @@ def calculate_vimshottari(moon_lon: float, birth_dt: datetime) -> list[dict]:
     Compute the full Vimshottari Dasha sequence anchored on Moon's exact
     sidereal longitude and the birth datetime.
 
-    Returns 9 Mahadasha dicts, each with:
-        lord, start, end, years,
-        antardashas: list of AD dicts, each with:
-            lord, start, end, years,
-            sub: list of PD dicts, each with:
-                lord, start, end, years,
-                sub: list of SD dicts, each with:
-                    lord, start, end, years,
-                    sub: list of Prana dicts
-
-    NOTE: deep sub-periods (PD → Prana) are always computed for ALL periods.
-    The formatter decides what to display based on the active period.
+    Returns 9 Mahadasha dicts, each with antardashas and all sub-levels.
     """
-    # ── Moon nakshatra & elapsed fraction ─────────────────────────────────
     moon_lon    = moon_lon % 360
     nak_idx     = int(moon_lon / NAK_SIZE) % 27
     birth_lord  = NAK_DASHA_LORD[nak_idx]
     pos_in_nak  = moon_lon % NAK_SIZE
-    elapsed_frac = pos_in_nak / NAK_SIZE       # 0.0 = start of nak, 1.0 = end
+    elapsed_frac = pos_in_nak / NAK_SIZE
 
-    # How much of birth lord's MD has already elapsed at birth
     birth_lord_years = DASHA_YEARS[birth_lord]
     elapsed_years    = elapsed_frac * birth_lord_years
 
-    # ── Anchor: exact start of the birth lord's MD ─────────────────────
     md_start    = _add_years(birth_dt, -elapsed_years)
     birth_idx   = DASHA_ORDER.index(birth_lord)
 
-    # ── Build 9 MD periods ─────────────────────────────────────────────
     sequence = []
     cur_start = md_start
 
@@ -135,7 +130,6 @@ def calculate_vimshottari(moon_lon: float, birth_dt: datetime) -> list[dict]:
         md_years    = DASHA_YEARS[md_lord]
         md_end      = _add_years(cur_start, md_years)
 
-        # Antardashas + all deeper levels
         antardashas = _dasha_periods(cur_start, md_lord_idx, md_years, depth=1)
 
         sequence.append({
@@ -153,7 +147,7 @@ def calculate_vimshottari(moon_lon: float, birth_dt: datetime) -> list[dict]:
 # ─── Active period finder ─────────────────────────────────────────────────────
 
 def _find_active(periods: list[dict], query_date: datetime) -> dict | None:
-    """Return the period dict (at any level) that contains query_date."""
+    """Return the period dict that contains query_date."""
     for p in periods:
         if p["start"] <= query_date < p["end"]:
             return p
@@ -162,10 +156,8 @@ def _find_active(periods: list[dict], query_date: datetime) -> dict | None:
 
 def get_active_dasha(sequence: list[dict], query_date: datetime) -> dict:
     """
-    Return a dict with the full active chain:
-        md, ad, pd, sd, prana
-    Each is a period dict {lord, start, end, years}.
-    Missing levels are None.
+    Return a dict with the full active chain: md, ad, pd, sd, prana.
+    Each is a period dict {lord, start, end, years}. Missing levels are None.
     """
     result = {"md": None, "ad": None, "pd": None, "sd": None, "prana": None}
 
@@ -194,7 +186,7 @@ def get_active_dasha(sequence: list[dict], query_date: datetime) -> dict:
     return result
 
 
-# ─── Dasha formatter ─────────────────────────────────────────────────────────
+# ─── Dasha formatter ──────────────────────────────────────────────────────────
 
 _FMT_FULL = "%Y-%m-%d %H:%M:%S"
 _FMT_DATE = "%b %d, %Y"
@@ -216,17 +208,19 @@ def _elapsed_pct(p: dict, query_date: datetime) -> float:
     return max(0.0, min(1.0, done / total)) if total else 0.0
 
 
-def format_dasha_block(sequence: list[dict], query_date: datetime) -> str:
+def format_dasha_block(sequence: list[dict], query_date: datetime,
+                       birth_dt: datetime | None = None) -> str:
     """
     Render dasha output for the Claude system prompt.
-    Shows:
-      1. Current active dasha — MD / AD / PD chain
-      2. Full Antardasha breakdown of the active Mahadasha
-      3. Full Pratyantar breakdown of the active Antardasha
-      4. Upcoming MD transitions
-      5. All 9 Mahadashas (birth → end of sequence)
 
-    SD / Prana levels are omitted to keep the prompt lean.
+    Shows:
+      1. Current active dasha chain — MD / AD / PD with progress bars
+      2. Full Antardasha breakdown of the active Mahadasha
+      3. Upcoming MD transitions (next 3)
+      4. All 9 Mahadashas (annotates birth-lord with balance at birth)
+
+    NOTE: The full Pratyantar table (previously section 3) is omitted to
+    save ~350 tokens.  The active PD is already visible in section 1.
     """
     active = get_active_dasha(sequence, query_date)
     lines  = []
@@ -275,26 +269,7 @@ def format_dasha_block(sequence: list[dict], query_date: datetime) -> str:
             )
         lines.append("")
 
-    # ── 3. Active AD — all Pratyantar Dashas ────────────────────────────
-    ad = active.get("ad")
-    if ad and ad.get("sub"):
-        lines.append(f"ALL PRATYANTARS IN {md['lord'].upper()}/{ad['lord'].upper()} ANTARDASHA")
-        lines.append("─" * 56)
-        lines.append(f"  {'Lord':<10} {'Start':<16} {'End':<16} {'Dur':>7}")
-        lines.append("  " + "─" * 52)
-        for pd in ad["sub"]:
-            marker   = " ◀ ACTIVE" if (active.get("pd") and pd["lord"] == active["pd"]["lord"]
-                                        and pd["start"] == active["pd"]["start"]) else ""
-            dur_days = (pd["end"] - pd["start"]).days
-            lines.append(
-                f"  {pd['lord']:<10} "
-                f"{_fmt(pd['start']):<16} "
-                f"{_fmt(pd['end']):<16} "
-                f"{dur_days:>5}d{marker}"
-            )
-        lines.append("")
-
-    # ── 4. Upcoming MD transitions ───────────────────────────────────────
+    # ── 3. Upcoming MD transitions ───────────────────────────────────────
     upcoming = [p for p in sequence if p["start"] > query_date][:3]
     if upcoming:
         lines.append("UPCOMING MAHADASHA TRANSITIONS")
@@ -304,16 +279,26 @@ def format_dasha_block(sequence: list[dict], query_date: datetime) -> str:
             lines.append(f"  → {p['lord']:<10} begins {_fmt(p['start'])}  ({days_away}d away)")
         lines.append("")
 
-    # ── 5. Full MD sequence ──────────────────────────────────────────────
+    # ── 4. Full MD sequence (with birth-balance annotation) ──────────────
     lines.append("FULL VIMSHOTTARI SEQUENCE")
     lines.append("─" * 56)
     for p in sequence:
-        marker = " ◀ NOW" if (md and p["lord"] == md["lord"]
-                               and p["start"] == md["start"]) else ""
+        now_marker = " ◀ NOW" if (md and p["lord"] == md["lord"]
+                                   and p["start"] == md["start"]) else ""
+
+        # Annotate the MD that was active at birth with its balance
+        birth_note = ""
+        if birth_dt and p["start"] <= birth_dt < p["end"]:
+            balance_days  = (p["end"] - birth_dt).days
+            balance_years = balance_days / DAYS_PER_YEAR
+            b_y = int(balance_years)
+            b_m = int(round((balance_years - b_y) * 12))
+            birth_note = f"  [balance at birth: {b_y}y {b_m}m]"
+
         lines.append(
             f"  {p['lord']:<10} "
             f"{_fmt(p['start'])}  →  {_fmt(p['end'])}"
-            f"{marker}"
+            f"{now_marker}{birth_note}"
         )
 
     return "\n".join(lines)
@@ -554,10 +539,14 @@ def format_yoga_block(yogas: list[dict]) -> str:
 # ─── System Prompt Template ───────────────────────────────────────────────────
 
 SYSTEM_PROMPT_TEMPLATE = """\
-{language_instruction}You are my personal Vedic astrology advisor — a masterful Jyotishi with deep 
-roots in classical Parashari and Jaimini traditions. Below is my complete birth 
-chart, divisional charts, dasha timeline, and yoga profile. This is the foundation 
+{language_instruction}You are my personal Vedic astrology advisor — a masterful Jyotishi with deep \
+roots in classical Parashari and Jaimini traditions. Below is my complete birth \
+chart, divisional charts, dasha timeline, and yoga profile. This is the foundation \
 of everything you tell me. Study it deeply before responding.
+════════════════════════════════════════════════════════
+NATIVE DETAILS
+════════════════════════════════════════════════════════
+{native_block}
 ════════════════════════════════════════════════════════
 BIRTH CHART DATA
 ════════════════════════════════════════════════════════
@@ -575,44 +564,44 @@ YOUR ROLE
 - Help me work WITH my placements, not against them
 
 HOW TO ANSWER
-- Every insight must be anchored in specific placements — house, sign, degree, 
+- Every insight must be anchored in specific placements — house, sign, degree, \
   nakshatra, pada, and active dasha. Never give generic astrology.
-- When I ask about timing, name the exact Mahadasha/Antardasha period and explain 
+- When I ask about timing, name the exact Mahadasha/Antardasha period and explain \
   WHY that planet's energy manifests as the situation I'm describing.
-- When I ask about a challenge, pair the difficulty with (a) what it's teaching me 
+- When I ask about a challenge, pair the difficulty with (a) what it's teaching me \
   and (b) a concrete remedy or reframe — ritual, behaviour, or awareness shift.
-- When I ask about a strength, show me HOW to activate it in practice — specific 
+- When I ask about a strength, show me HOW to activate it in practice — specific \
   actions, not abstract affirmations.
-- My Neecha Bhanga and Viparita Raja Yogas are latent power that activates through 
+- My Neecha Bhanga and Viparita Raja Yogas are latent power that activates through \
   adversity. Frame my hardest difficulties as the launch mechanism, not the obstacle.
-- My Parivartana Yogas mean those two houses are lived as one — weave both 
+- My Parivartana Yogas mean those two houses are lived as one — weave both \
   significations into any reading that touches those planets.
-- If the question is ambiguous, ask: "Are you asking about [A] or [B]? 
+- If the question is ambiguous, ask: "Are you asking about [A] or [B]? \
   My chart speaks differently to each."
-- After answering, if the chart reveals something important I haven't asked about, 
+- After answering, if the chart reveals something important I haven't asked about, \
   flag it briefly: "Your chart also shows something worth discussing about [X]..."
 
 HOW TO ANSWER PREDICTIVE QUESTIONS
 When I ask about concrete facts (timing, people, events):
-1. Check D1 first, then the relevant divisional chart (D3 for 
+1. Check D1 first, then the relevant divisional chart (D3 for \
    siblings, D9 for spouse, D10 for career, D7 for children)
 2. State what EACH chart shows separately before synthesizing
-3. When chart indicators conflict, name the conflict honestly 
+3. When chart indicators conflict, name the conflict honestly \
    rather than picking the cleaner answer
-4. Weight the karaka (significator planet) above sign-based 
+4. Weight the karaka (significator planet) above sign-based \
    heuristics when they disagree
-5. Confidence should match evidence — if signals are mixed, 
+5. Confidence should match evidence — if signals are mixed, \
    say "the chart suggests X but with uncertainty because Y"
 
 SHOWING YOUR WORK
-- Do NOT display the full calculation table or factor-by-factor 
+- Do NOT display the full calculation table or factor-by-factor \
   breakdown on screen
-- Internally check all relevant charts and indicators, then 
+- Internally check all relevant charts and indicators, then \
   surface only the synthesized conclusion
-- You may briefly name the 1-2 strongest chart signals that 
-  drove your answer (1 sentence max), but skip the full 
+- You may briefly name the 1-2 strongest chart signals that \
+  drove your answer (1 sentence max), but skip the full \
   methodology display
-- If the user wants to see the reasoning, they'll ask — 
+- If the user wants to see the reasoning, they'll ask — \
   default is clean, gist-only output
 
 TONE
@@ -642,8 +631,6 @@ Never stop mid-thought. Every response must end with a complete sentence.
 
 # ─── Query-aware divisional chart selector ───────────────────────────────────
 
-# Keywords that trigger loading an additional divisional chart.
-# D9 and D10 are always included; only extras listed here.
 _CHART_TRIGGERS: dict[str, list[str]] = {
     "d3":  ["sibling", "brother", "sister", "courage", "valor"],
     "d4":  ["property", "home", "land", "house", "vehicle", "car", "real estate", "fixed asset"],
@@ -681,18 +668,21 @@ def detect_extra_charts(query: str) -> list[str]:
 
 def build_system_prompt(chart: dict, birth_dt: datetime, query_date: datetime = None,
                         language: str = "English",
-                        extra_charts: list | None = None) -> str:
+                        extra_charts: list | None = None,
+                        birth_details: dict | None = None) -> str:
     """
     Build the complete Claude system prompt from a calculated chart.
 
     Parameters
     ----------
-    chart        : Output of vedic_calc.calculate_chart()
-    birth_dt     : Actual birth datetime in UTC (for dasha timing)
-    query_date   : Date for 'active dasha' calculation (default: now)
-    language     : Language for responses (default: English)
-    extra_charts : Additional divisional chart keys to include beyond
-                   the default D1 + D9 + D10.  e.g. ["d6", "d60"]
+    chart         : Output of vedic_calc.calculate_chart()
+    birth_dt      : Actual birth datetime in UTC (for dasha timing)
+    query_date    : Date for 'active dasha' calculation (default: now)
+    language      : Language for responses (default: English)
+    extra_charts  : Additional divisional chart keys beyond D1 + D9 + D10
+    birth_details : Optional dict with {name, dob, tob, pob} from the
+                    birth form — used to populate the NATIVE DETAILS block.
+                    dob format: "YYYY-MM-DD", tob format: "HH:MM"
     """
     if query_date is None:
         query_date = datetime.utcnow()
@@ -702,22 +692,49 @@ def build_system_prompt(chart: dict, birth_dt: datetime, query_date: datetime = 
     chart_block = format_for_prompt(chart, extra_charts=extra_charts)
 
     # ── PRECISION FIX: use raw full-precision Moon longitude ──────────────
-    # chart["raw_lons"]["Moon"] comes directly from pyswisseph with no rounding.
-    # Previously this was reconstructed from chart["d1"]["Moon"]["degrees"]
-    # (rounded to 2 dp), which caused small but measurable timing drift.
     if "raw_lons" in chart:
         moon_lon = chart["raw_lons"]["Moon"]
     else:
-        # Fallback for older chart dicts (pre-v2 vedic_calc)
         moon_lon = chart["d1"]["Moon"]["sign_idx"] * 30 + chart["d1"]["Moon"]["degrees"]
 
     sequence    = calculate_vimshottari(moon_lon, birth_dt)
-    dasha_block = format_dasha_block(sequence, query_date)
+    dasha_block = format_dasha_block(sequence, query_date, birth_dt=birth_dt)
 
     yogas      = detect_yogas(chart)
     yoga_block = format_yoga_block(yogas)
 
-    # Build language instruction
+    # ── Native details block ──────────────────────────────────────────────
+    bd = birth_details or {}
+    name_str = bd.get("name", "").strip()
+    dob_str  = bd.get("dob", "")
+    tob_str  = bd.get("tob", "")
+    pob_str  = bd.get("pob", "")
+
+    # Format date of birth nicely
+    if dob_str:
+        try:
+            dob_dt       = datetime.strptime(dob_str, "%Y-%m-%d")
+            dob_formatted = dob_dt.strftime("%B %d, %Y")
+        except ValueError:
+            dob_formatted = dob_str
+    else:
+        dob_formatted = birth_dt.strftime("%B %d, %Y")
+
+    # Age at query date
+    age = query_date.year - birth_dt.year
+    if (query_date.month, query_date.day) < (birth_dt.month, birth_dt.day):
+        age -= 1
+
+    native_lines = []
+    if name_str:
+        native_lines.append(f"Name:          {name_str}")
+    native_lines.append(f"Date of Birth: {dob_formatted}  |  Time: {tob_str or birth_dt.strftime('%H:%M')} (local)")
+    if pob_str:
+        native_lines.append(f"Place:         {pob_str}")
+    native_lines.append(f"Age:           {age} years (as of {query_date.strftime('%B %Y')})")
+    native_block = "\n".join(native_lines)
+
+    # ── Language instruction ──────────────────────────────────────────────
     if language and language.lower() != "english":
         language_instruction = (
             f"LANGUAGE INSTRUCTION: You must respond entirely in {language}. "
@@ -732,6 +749,7 @@ def build_system_prompt(chart: dict, birth_dt: datetime, query_date: datetime = 
         dasha_block=dasha_block,
         yoga_block=yoga_block,
         language_instruction=language_instruction,
+        native_block=native_block,
     )
 
 
@@ -749,21 +767,19 @@ if __name__ == "__main__":
 
     seq = calculate_vimshottari(chart["raw_lons"]["Moon"], birth_utc)
 
-    # Validate Venus MD
-    venus_md = next(p for p in seq if p["lord"] == "Venus")
-    print(f"Venus MD: {venus_md['start']} → {venus_md['end']}")
-    print("Venus AD breakdown:")
-    for ad in venus_md["antardashas"]:
-        print(f"  {ad['lord']:<10} {ad['start']} → {ad['end']}")
-
-    print()
-    print("Active dasha at query date 2024-01-01:")
-    active = get_active_dasha(seq, datetime(2024, 1, 1))
-    for level in ("md", "ad", "pd", "sd", "prana"):
-        p = active.get(level)
-        if p:
-            print(f"  {level.upper():<6} {p['lord']:<10} {p['start']} → {p['end']}")
-
-    print()
-    block = format_dasha_block(seq, datetime(2024, 1, 1))
+    print("Full sequence with birth-balance annotation:")
+    block = format_dasha_block(seq, datetime(2024, 1, 1), birth_dt=birth_utc)
     print(block)
+
+    print()
+    prompt = build_system_prompt(
+        chart, birth_utc,
+        query_date=datetime(2024, 1, 1),
+        birth_details={
+            "name": "Test User",
+            "dob":  "1998-10-24",
+            "tob":  "18:30",
+            "pob":  "Nagpur, Maharashtra, India",
+        }
+    )
+    print(prompt[:800], "...")
