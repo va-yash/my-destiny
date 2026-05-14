@@ -11,19 +11,27 @@ Run locally:
   uvicorn main:app --reload --port 8000
 
 STATELESS DESIGN (v2)
-  /api/chart now returns system_prompt in the response.
+  /api/chart returns system_prompt in the response.
   The frontend stores it and sends it back on every /api/ask call.
   This eliminates "Session not found" errors caused by Railway
   container restarts wiping the in-memory SESSIONS dict.
   SESSIONS is kept as an optional short-lived cache only.
 
-TOKEN OPTIMISATION (v3)
-  The system prompt is large (~20k tokens). We use Anthropic's
-  prompt-caching API so repeated queries within a 5-minute window
-  only pay for the (small) user question tokens, not the full system
-  prompt every time. After the first call, input tokens drop ~90%.
-  Header: anthropic-beta: prompt-caching-2024-07-31
-  System is sent as a content array with cache_control on the block.
+TOKEN OPTIMISATION (v4)
+  • Base system prompt: D1 + D9 + D10 only (not all 19 charts).
+  • Additional charts injected on first mention, kept for the session.
+  • Pratyantar Dasha table removed from prompt (~350 tokens saved).
+  • Prompt caching header: system prompt cached for 5 minutes.
+    After the 1st call, input tokens drop ~80-90% on cache hits.
+
+CACHING FIX (v4)
+  Previously, include_references=False appended a large string to
+  system_prompt, creating a *different* string that never matched the
+  cached version — every call paid full input cost.
+
+  Fix: the main system_prompt is sent as block[0] with cache_control.
+  The no-references instruction is sent as a second, uncached block[1]
+  only when needed.  Block[0] remains identical and always cache-hits.
 """
 
 import os
@@ -45,18 +53,32 @@ from prompt_builder import build_system_prompt, detect_extra_charts
 
 load_dotenv()
 
-ANTHROPIC_KEY   = os.getenv("ANTHROPIC_API_KEY", "")
-OPENCAGE_KEY    = os.getenv("OPENCAGE_API_KEY", "")
-ALLOWED_ORIGIN  = os.getenv("ALLOWED_ORIGIN", "*")
-CLAUDE_MODEL    = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-5")
-MAX_TOKENS      = int(os.getenv("MAX_TOKENS", "2500"))
+ANTHROPIC_KEY  = os.getenv("ANTHROPIC_API_KEY", "")
+OPENCAGE_KEY   = os.getenv("OPENCAGE_API_KEY", "")
+ALLOWED_ORIGIN = os.getenv("ALLOWED_ORIGIN", "*")
+CLAUDE_MODEL   = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-5")
+MAX_TOKENS     = int(os.getenv("MAX_TOKENS", "2500"))
+
+# Plain-language instruction injected as a second (uncached) system block
+# when include_references=False.  Kept separate so block[0] stays cached.
+_NO_REF_INSTRUCTION = (
+    "DISPLAY INSTRUCTION (MANDATORY): Answer the user's question "
+    "using the complete chart knowledge above, but do NOT mention any "
+    "specific planet names (Sun, Moon, Mars, etc.), sign names (Aries, "
+    "Scorpio, etc.), house numbers, nakshatra names, dasha period names, "
+    "yoga names, or any other astrological terminology in your response. "
+    "Translate every insight into plain observations about the person's "
+    "personality, tendencies, patterns, and practical guidance. "
+    "Write as if you are a wise counsellor who just happens to understand "
+    "this person deeply — no astrology-speak at all."
+)
 
 # ─── In-memory session store ──────────────────────────────────────────────────
 SESSIONS: dict[str, dict] = {}
 
 # ─── App setup ────────────────────────────────────────────────────────────────
 
-app = FastAPI(title="My Destiny", version="2.0.0")
+app = FastAPI(title="My Destiny", version="3.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -78,12 +100,12 @@ class BirthInput(BaseModel):
 
 
 class AskInput(BaseModel):
-    session_id:         str        = ""   # kept for backward compat
-    system_prompt:      str        = ""   # preferred: client sends this every time
+    session_id:         str        = ""
+    system_prompt:      str        = ""
     question:           str
-    history:            list[dict] = []   # [{role: "user"|"assistant", content: str}]
+    history:            list[dict] = []
     language:           str        = "English"
-    include_references: bool       = True  # True = show planetary refs; False = hide them
+    include_references: bool       = True
 
 
 # ─── Geocoding + timezone helper ─────────────────────────────────────────────
@@ -93,7 +115,7 @@ async def geocode_city(city: str) -> dict:
     if not OPENCAGE_KEY:
         raise HTTPException(500, "OPENCAGE_API_KEY not configured")
 
-    url = "https://api.opencagedata.com/geocode/v1/json"
+    url    = "https://api.opencagedata.com/geocode/v1/json"
     params = {"q": city, "key": OPENCAGE_KEY, "limit": 1, "no_annotations": 0}
 
     async with httpx.AsyncClient(timeout=10) as client:
@@ -153,25 +175,30 @@ async def create_chart(birth: BirthInput):
     except Exception as e:
         raise HTTPException(500, f"Chart calculation failed: {str(e)}")
 
+    birth_details = {
+        "name": birth.name,
+        "dob":  birth.dob,
+        "tob":  birth.tob,
+        "pob":  geo["formatted_address"],
+    }
+
     try:
         system_prompt = build_system_prompt(
             chart,
             birth_dt=birth_utc,
             query_date=datetime.utcnow(),
             language=birth.language,
+            birth_details=birth_details,
         )
     except Exception as e:
         raise HTTPException(500, f"Prompt build failed: {str(e)}")
 
     session_id = str(uuid.uuid4())
     SESSIONS[session_id] = {
-        # Raw chart object — used to rebuild optimised system prompts per query
-        "chart":          chart,
-        "birth_dt":       birth_utc,
-        # Accumulates which extra divisional charts have been loaded this session
-        "loaded_charts":  set(),
-        # Minimal cached prompt (fallback if session is found but chart missing)
-        "system_prompt":  system_prompt,
+        "chart":         chart,
+        "birth_dt":      birth_utc,
+        "loaded_charts": set(),
+        "system_prompt": system_prompt,
         "birth_data": {
             "name":     birth.name,
             "dob":      birth.dob,
@@ -183,6 +210,7 @@ async def create_chart(birth: BirthInput):
             "lng":      geo["lng"],
             "timezone": geo["timezone"],
         },
+        "birth_details": birth_details,
         "language": birth.language,
     }
 
@@ -192,6 +220,11 @@ async def create_chart(birth: BirthInput):
         "session_id":     session_id,
         "system_prompt":  system_prompt,
         "name":           birth.name or "Friend",
+        # Birth details returned so the frontend can store them in the profile
+        "dob":            birth.dob,
+        "tob":            birth.tob,
+        "pob":            geo["formatted_address"],
+        # Chart identity
         "ascendant":      ct["ascendant"]["sign"],
         "asc_nakshatra":  ct["ascendant"]["nakshatra"],
         "asc_pada":       ct["ascendant"]["pada"],
@@ -210,15 +243,14 @@ async def ask_question(req: AskInput):
     """
     Streaming endpoint with prompt caching + on-demand divisional charts.
 
-    TOKEN OPTIMISATION (v4)
-    ─────────────────────────────────────────────────────
-    1. Base system prompt now includes only D1 + D9 + D10 (not all 19
-       divisional charts). Most questions only need these.
-    2. Additional divisional charts are injected on first mention and
-       kept loaded for the rest of the session (accumulated in SESSIONS).
-    3. SD/Prana dasha levels removed from prompt (saves ~350 tokens).
-    4. Prompt caching header keeps the system prompt cached for 5 minutes.
-    5. After the 1st request, input tokens drop ~80-90% on cache hits.
+    CACHING DESIGN
+    ──────────────
+    system_content[0]  = full system prompt  + cache_control (ephemeral)
+    system_content[1]  = no-references instruction (only when needed, NO cache)
+
+    Because block[0] is always identical for a given session, it hits the
+    5-minute Anthropic prompt cache on every subsequent call regardless of
+    whether include_references changes between turns.
     """
     language = req.language or "English"
 
@@ -226,9 +258,6 @@ async def ask_question(req: AskInput):
     session = SESSIONS.get(req.session_id) if req.session_id else None
 
     if session and "chart" in session:
-        # ── Server-side optimised rebuild ────────────────────────────────
-        # Detect if the question needs additional divisional charts,
-        # accumulate them in the session so they stay loaded.
         new_extras = detect_extra_charts(req.question)
         session["loaded_charts"].update(new_extras)
         extra_charts = list(session["loaded_charts"]) or None
@@ -239,6 +268,7 @@ async def ask_question(req: AskInput):
             query_date=datetime.utcnow(),
             language=language,
             extra_charts=extra_charts,
+            birth_details=session.get("birth_details"),
         )
     elif req.system_prompt:
         system_prompt = req.system_prompt
@@ -247,29 +277,12 @@ async def ask_question(req: AskInput):
     else:
         raise HTTPException(404, "Session not found. Please re-enter birth details.")
 
-    # ── Planetary reference mode ─────────────────────────────────────────────
-    # When include_references=False the model sees the FULL chart data and
-    # bases its answer on it, but must not surface any astrological jargon
-    # in the response. The user gets plain practical guidance only.
-    if not req.include_references:
-        system_prompt += (
-            "\n\nDISPLAY INSTRUCTION (MANDATORY): Answer the user's question "
-            "using the complete chart knowledge above, but do NOT mention any "
-            "specific planet names (Sun, Moon, Mars, etc.), sign names (Aries, "
-            "Scorpio, etc.), house numbers, nakshatra names, dasha period names, "
-            "yoga names, or any other astrological terminology in your response. "
-            "Translate every insight into plain observations about the person's "
-            "personality, tendencies, patterns, and practical guidance. "
-            "Write as if you are a wise counsellor who just happens to understand "
-            "this person deeply — no astrology-speak at all."
-        )
-
     if not ANTHROPIC_KEY:
         raise HTTPException(500, "ANTHROPIC_API_KEY not configured")
 
-    # Build messages array
+    # Build messages array (cap history at 10 turns to control token use)
     messages = []
-    for msg in req.history:
+    for msg in req.history[-10:]:
         if msg.get("role") in ("user", "assistant") and msg.get("content"):
             messages.append({"role": msg["role"], "content": msg["content"]})
     messages.append({"role": "user", "content": req.question})
@@ -278,14 +291,12 @@ async def ask_question(req: AskInput):
         headers = {
             "x-api-key":         ANTHROPIC_KEY,
             "anthropic-version": "2023-06-01",
-            # Prompt caching beta — reduces repeated input tokens by ~90%
+            # Prompt caching beta — block[0] cached for 5 minutes
             "anthropic-beta":    "prompt-caching-2024-07-31",
             "content-type":      "application/json",
         }
 
-        # System sent as a content array so cache_control can be attached.
-        # Anthropic will cache this block for 5 minutes. Subsequent requests
-        # from any process sharing the same API key will hit the cache.
+        # Block[0]: the full system prompt — always cached
         system_content = [
             {
                 "type": "text",
@@ -293,6 +304,14 @@ async def ask_question(req: AskInput):
                 "cache_control": {"type": "ephemeral"},
             }
         ]
+
+        # Block[1]: plain-language override — only when needed, never cached
+        # This keeps block[0] identical across all calls so caching always hits.
+        if not req.include_references:
+            system_content.append({
+                "type": "text",
+                "text": _NO_REF_INSTRUCTION,
+            })
 
         payload = {
             "model":      CLAUDE_MODEL,
