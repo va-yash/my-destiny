@@ -194,15 +194,12 @@ function ReferenceToggle({ value, onChange }) {
       }}>
         Refs
       </span>
-
-      {/* Toggle pill */}
       <button
         onClick={() => onChange(!value)}
         title={value ? 'Showing planetary references — click to hide' : 'Hiding planetary references — click to show'}
         style={{
           position: 'relative',
-          width: '40px',
-          height: '22px',
+          width: '40px', height: '22px',
           borderRadius: '11px',
           border: 'none',
           cursor: 'pointer',
@@ -218,15 +215,13 @@ function ReferenceToggle({ value, onChange }) {
           position: 'absolute',
           top: '3px',
           left: value ? '21px' : '3px',
-          width: '16px',
-          height: '16px',
+          width: '16px', height: '16px',
           borderRadius: '50%',
           background: value ? 'var(--gold)' : 'rgba(255,255,255,0.3)',
           transition: 'left 0.25s, background 0.25s',
           boxShadow: '0 1px 4px rgba(0,0,0,0.3)',
         }} />
       </button>
-
       <span style={{
         fontFamily: 'var(--font-mono)',
         fontSize: '10px',
@@ -237,6 +232,78 @@ function ReferenceToggle({ value, onChange }) {
       }}>
         {value ? 'ON' : 'OFF'}
       </span>
+    </div>
+  )
+}
+
+// ─── Save CTA banner ──────────────────────────────────────────────────────────
+function SaveCTA({ onOpenProfile, onDismiss }) {
+  return (
+    <div style={{
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      gap: '10px',
+      padding: '10px 16px',
+      background: 'linear-gradient(135deg, rgba(201,168,76,0.08), rgba(201,168,76,0.03))',
+      borderBottom: '1px solid rgba(201,168,76,0.18)',
+      animation: 'ctaPulse 2.4s ease-in-out infinite',
+      flexShrink: 0,
+    }}>
+      <style>{`
+        @keyframes ctaPulse {
+          0%,100% { border-bottom-color: rgba(201,168,76,0.18); }
+          50%      { border-bottom-color: rgba(201,168,76,0.45); }
+        }
+      `}</style>
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
+        <span style={{ color: 'var(--gold)', fontSize: '13px', flexShrink: 0 }}>✦</span>
+        <span style={{
+          fontFamily: 'var(--font-body)',
+          fontSize: '13px',
+          color: 'var(--text-dim)',
+          whiteSpace: 'nowrap',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+        }}>
+          This reading disappears when you leave.{' '}
+          <button
+            onClick={onOpenProfile}
+            style={{
+              background: 'none', border: 'none',
+              color: 'var(--gold)',
+              fontFamily: 'var(--font-body)',
+              fontSize: '13px',
+              cursor: 'pointer',
+              padding: 0,
+              textDecoration: 'underline',
+              textUnderlineOffset: '2px',
+            }}
+          >
+            Save to My Profile →
+          </button>
+        </span>
+      </div>
+
+      <button
+        onClick={onDismiss}
+        title="Dismiss"
+        style={{
+          background: 'none', border: 'none',
+          color: 'var(--text-muted)',
+          cursor: 'pointer',
+          fontSize: '14px',
+          lineHeight: 1,
+          padding: '2px 4px',
+          flexShrink: 0,
+          transition: 'color 0.2s',
+        }}
+        onMouseEnter={e => e.currentTarget.style.color = 'var(--text-dim)'}
+        onMouseLeave={e => e.currentTarget.style.color = 'var(--text-muted)'}
+      >
+        ✕
+      </button>
     </div>
   )
 }
@@ -252,18 +319,27 @@ const SUGGESTIONS = [
 ]
 
 // ─── Main Chat Interface ──────────────────────────────────────────────────────
-export default function ChatInterface({ session, onReset }) {
-  const [messages, setMessages]           = useState([])
-  const [input, setInput]                 = useState('')
-  const [streaming, setStreaming]         = useState(false)
-  const [error, setError]                 = useState('')
-  const [includeRefs, setIncludeRefs]     = useState(true)
+export default function ChatInterface({
+  session,
+  onReset,
+  // Profile integration
+  chartSaved,       // bool — true once chart is saved to a profile
+  onOpenProfile,    // () => void — opens the profile panel
+}) {
+  const [messages,     setMessages]     = useState([])
+  const [input,        setInput]        = useState('')
+  const [streaming,    setStreaming]     = useState(false)
+  const [error,        setError]        = useState('')
+  const [includeRefs,  setIncludeRefs]  = useState(true)
+  const [ctaDismissed, setCtaDismissed] = useState(false)
 
   const scrollRef    = useRef(null)
   const inputRef     = useRef(null)
   const abortRef     = useRef(null)
-  // Track whether user has manually scrolled up during streaming
   const userScrolled = useRef(false)
+
+  // Show the save CTA when the chart is not yet saved and the user hasn't dismissed it
+  const showSaveCTA = !chartSaved && !ctaDismissed
 
   // ── Scroll helpers ─────────────────────────────────────────────────────────
   const isNearBottom = () => {
@@ -279,7 +355,6 @@ export default function ChatInterface({ session, onReset }) {
     }
   }
 
-  // Detect when user manually scrolls up (only matters during streaming)
   useEffect(() => {
     const el = scrollRef.current
     if (!el) return
@@ -294,12 +369,14 @@ export default function ChatInterface({ session, onReset }) {
     return () => el.removeEventListener('scroll', handleScroll)
   }, [streaming])
 
-  // Auto-scroll during streaming only if user hasn't scrolled away
   useEffect(() => {
-    if (streaming) {
-      scrollToBottom(false)   // respects userScrolled
-    }
+    if (streaming) scrollToBottom(false)
   }, [messages])
+
+  // Reset CTA state whenever a new session arrives
+  useEffect(() => {
+    setCtaDismissed(false)
+  }, [session])
 
   // Opening message
   useEffect(() => {
@@ -320,16 +397,15 @@ export default function ChatInterface({ session, onReset }) {
     setError('')
 
     const userMsg = { role: 'user', content: text.trim() }
-    const history = messages.slice(-8).map(m => ({ role: m.role, content: m.content }))
+    // Cap history at 10 turns to control token spend
+    const history = messages.slice(-10).map(m => ({ role: m.role, content: m.content }))
 
     setMessages(prev => [...prev, userMsg])
     setInput('')
     setStreaming(true)
-    // User just sent — always snap to bottom and reset scroll flag
     userScrolled.current = false
     setTimeout(() => scrollToBottom(true), 50)
 
-    // Placeholder assistant message
     setMessages(prev => [...prev, { role: 'assistant', content: '' }])
 
     const controller = new AbortController()
@@ -378,18 +454,13 @@ export default function ChatInterface({ session, onReset }) {
             if (event.text) {
               setMessages(prev => {
                 const updated = [...prev]
-                const last = updated[updated.length - 1]
-                updated[updated.length - 1] = {
-                  ...last,
-                  content: last.content + event.text,
-                }
+                const last    = updated[updated.length - 1]
+                updated[updated.length - 1] = { ...last, content: last.content + event.text }
                 return updated
               })
             }
           } catch (parseErr) {
-            if (parseErr.message !== 'Unexpected end of JSON input') {
-              throw parseErr
-            }
+            if (parseErr.message !== 'Unexpected end of JSON input') throw parseErr
           }
         }
       }
@@ -439,7 +510,7 @@ export default function ChatInterface({ session, onReset }) {
         gap: '10px',
         flexWrap: 'nowrap',
       }}>
-        {/* Left: chart identity */}
+        {/* Chart identity */}
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{
             fontFamily: 'var(--font-display)',
@@ -471,10 +542,10 @@ export default function ChatInterface({ session, onReset }) {
           </div>
         </div>
 
-        {/* Centre: planetary reference toggle */}
+        {/* Planetary reference toggle */}
         <ReferenceToggle value={includeRefs} onChange={setIncludeRefs} />
 
-        {/* Right: new chart */}
+        {/* New chart */}
         <button
           onClick={onReset}
           style={{
@@ -502,6 +573,14 @@ export default function ChatInterface({ session, onReset }) {
           New Chart
         </button>
       </header>
+
+      {/* ── Save CTA banner ─────────────────────────────────────────────── */}
+      {showSaveCTA && (
+        <SaveCTA
+          onOpenProfile={onOpenProfile}
+          onDismiss={() => setCtaDismissed(true)}
+        />
+      )}
 
       {/* ── Messages ───────────────────────────────────────────────────── */}
       <div
