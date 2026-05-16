@@ -2,20 +2,31 @@
 vedic_calc.py — Vedic Astrology Calculation Engine
 Requires: pip install pyswisseph pytz
 
-Outputs structured D1–D60 divisional chart data ready to inject into Claude prompt.
+Outputs structured D1-D60 divisional chart data ready to inject into Claude prompt.
 
 CHANGELOG
-─────────
+---------
+v3.0
+  • FIX: sidereal_longitude() now uses FLG_TRUEPOS to match JHora default
+    (geometric/true positions, not apparent). Shift is ±22 arcsec — matters
+    for D45/D60 boundary cases.
+  • FIX: calculate_chart() now stores d1_asc (D1 ascendant sign index) in the
+    result dict so prompt_builder.detect_yogas() can use it directly without
+    fragile Moon-based derivation.
+  • OPTIMISE: format_for_prompt() uses ASCII separators instead of Unicode
+    box-drawing chars, drops per-chart purpose strings, shortens column headers.
+    Saves ~400 tokens when all charts are loaded.
+
 v2.0
-  • BUG FIX: Each divisional chart (D2–D60) now uses its OWN ascendant
+  • BUG FIX: Each divisional chart (D2-D60) now uses its OWN ascendant
     for house calculation, derived by applying the same divisional formula
-    to the D1 ascendant longitude.  Previously all charts incorrectly
+    to the D1 ascendant longitude. Previously all charts incorrectly
     used the D1 (Rasi) ascendant sign, producing wrong house numbers.
   • Added full divisional chart suite: D2 D3 D4 D5 D6 D7 D8 D9 D10
     D11 D12 D16 D20 D24 D27 D30 D40 D45 D60
-  • format_for_prompt() now outputs all divisional charts.
+  • format_for_prompt() outputs only requested divisional charts.
   • calculate_chart() returns keys for every chart plus divisional
-    ascendant indices stored under  "<key>_asc"  (e.g. "d9_asc").
+    ascendant indices stored under "<key>_asc" (e.g. "d9_asc").
 """
 
 import swisseph as swe
@@ -25,7 +36,7 @@ from datetime import datetime
 from typing import Optional
 import math
 
-# ─── Constants ────────────────────────────────────────────────────────────────
+# --- Constants ----------------------------------------------------------------
 
 SIGNS = [
     "Aries", "Taurus", "Gemini", "Cancer", "Leo", "Virgo",
@@ -102,10 +113,10 @@ COMBUST_ORB = {
 
 # Navamsa (D9) starting sign by element group
 NAVAMSA_START = {
-    "fire":  0,   # Aries     — for Aries, Leo, Sagittarius
-    "earth": 9,   # Capricorn — for Taurus, Virgo, Capricorn
-    "air":   6,   # Libra     — for Gemini, Libra, Aquarius
-    "water": 3,   # Cancer    — for Cancer, Scorpio, Pisces
+    "fire":  0,   # Aries     -- for Aries, Leo, Sagittarius
+    "earth": 9,   # Capricorn -- for Taurus, Virgo, Capricorn
+    "air":   6,   # Libra     -- for Gemini, Libra, Aquarius
+    "water": 3,   # Cancer    -- for Cancer, Scorpio, Pisces
 }
 
 # Element of each sign (0-indexed)
@@ -118,28 +129,28 @@ SIGN_ELEMENT = [
 # Modality: 0 = movable/cardinal, 1 = fixed, 2 = mutable/dual
 SIGN_MODALITY = [0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2]
 
-# ── D5 Panchamsa fixed sign sequences (Parashari standard) ───────────────────
+# D5 Panchamsa fixed sign sequences (Parashari standard)
 # Odd signs  (sign_idx % 2 == 0): Aries, Aquarius, Sagittarius, Gemini, Libra
 D5_ODD_SIGNS  = [0, 10, 8, 2, 6]
 # Even signs (sign_idx % 2 == 1): Taurus, Virgo, Capricorn, Pisces, Scorpio
 D5_EVEN_SIGNS = [1, 5, 9, 11, 7]
 
-# ── D30 Trimshamsa: unequal divisions (Parashari standard) ───────────────────
-# Odd signs:  Mars→Aries(0-5°), Saturn→Aquarius(5-10°), Jupiter→Sagittarius(10-18°),
-#             Mercury→Gemini(18-25°), Venus→Libra(25-30°)
+# D30 Trimshamsa: unequal divisions (Parashari standard)
+# Odd signs:  Mars->Aries(0-5), Saturn->Aquarius(5-10), Jupiter->Sagittarius(10-18),
+#             Mercury->Gemini(18-25), Venus->Libra(25-30)
 D30_ODD_BOUNDS = [5, 10, 18, 25, 30]
 D30_ODD_SIGNS  = [0, 10, 8, 2, 6]      # Aries, Aquarius, Sagittarius, Gemini, Libra
 
-# Even signs: Venus→Taurus(0-5°), Mercury→Virgo(5-12°), Jupiter→Pisces(12-20°),
-#             Saturn→Capricorn(20-25°), Mars→Scorpio(25-30°)
+# Even signs: Venus->Taurus(0-5), Mercury->Virgo(5-12), Jupiter->Pisces(12-20),
+#             Saturn->Capricorn(20-25), Mars->Scorpio(25-30)
 D30_EVEN_BOUNDS = [5, 12, 20, 25, 30]
 D30_EVEN_SIGNS  = [1, 5, 11, 9, 7]     # Taurus, Virgo, Pisces, Capricorn, Scorpio
 
 
-# ─── Utility functions ────────────────────────────────────────────────────────
+# --- Utility functions --------------------------------------------------------
 
 def angular_diff(lon1: float, lon2: float) -> float:
-    """Smallest angular distance between two longitudes (0–180)."""
+    """Smallest angular distance between two longitudes (0-180)."""
     diff = abs(lon1 - lon2) % 360
     return min(diff, 360 - diff)
 
@@ -156,17 +167,21 @@ def sidereal_longitude(jd: float, planet_id: int) -> tuple[float, float]:
     """
     Return (sidereal_longitude, speed) for a planet using Lahiri ayanamsha.
     Speed < 0 means retrograde.
+
+    FLG_TRUEPOS: uses geometric (true) positions, matching JHora's default.
+    Difference vs apparent positions: up to +/-22 arcsec. Matters for
+    D45/D60 boundary cases.
     """
     swe.set_sid_mode(swe.SIDM_LAHIRI)
-    flags = swe.FLG_SIDEREAL | swe.FLG_SPEED
+    flags = swe.FLG_SIDEREAL | swe.FLG_SPEED | swe.FLG_TRUEPOS
     result, _ = swe.calc_ut(jd, planet_id, flags)
     return result[0], result[3]  # longitude, speed
 
 
 def get_nakshatra_info(lon: float) -> tuple[str, int, str]:
     """Return (nakshatra_name, pada, nakshatra_lord) for a sidereal longitude."""
-    nak_size  = 360 / 27        # 13.333...°
-    pada_size = nak_size / 4    # 3.333...°
+    nak_size  = 360 / 27        # 13.333...
+    pada_size = nak_size / 4    # 3.333...
     idx  = int(lon / nak_size) % 27
     pada = int((lon % nak_size) / pada_size) + 1
     return NAKSHATRAS[idx], pada, NAKSHATRA_LORDS[idx]
@@ -181,7 +196,7 @@ def get_sign_and_degree(lon: float) -> tuple[int, str, float]:
 
 
 def whole_sign_house(planet_sign: int, asc_sign: int) -> int:
-    """Whole Sign house number (1–12)."""
+    """Whole Sign house number (1-12)."""
     return (planet_sign - asc_sign) % 12 + 1
 
 
@@ -190,37 +205,37 @@ def is_vargottam(d1_sign: int, d9_sign: int) -> bool:
     return d1_sign == d9_sign
 
 
-# ─── Divisional chart sign functions ─────────────────────────────────────────
+# --- Divisional chart sign functions -----------------------------------------
 # Every function returns (sign_index: int, sign_name: str).
-# Input: sidereal longitude in degrees (0–360).
+# Input: sidereal longitude in degrees (0-360).
 
 def d1_sign(lon: float) -> tuple[int, str]:
-    """D1 — Rasi (natal chart). Direct placement."""
+    """D1 - Rasi (natal chart). Direct placement."""
     idx = int(lon / 30) % 12
     return idx, SIGNS[idx]
 
 
 def hora_sign(lon: float) -> tuple[int, str]:
     """
-    D2 — Hora.
-    Odd signs  (Ar, Ge, Le, Li, Sg, Aq):  0-15° → Leo,    15-30° → Cancer
-    Even signs (Ta, Ca, Vi, Sc, Cp, Pi):  0-15° → Cancer, 15-30° → Leo
+    D2 - Hora.
+    Odd signs  (Ar, Ge, Le, Li, Sg, Aq):  0-15 -> Leo,    15-30 -> Cancer
+    Even signs (Ta, Ca, Vi, Sc, Cp, Pi):  0-15 -> Cancer, 15-30 -> Leo
     """
     sign_idx = int(lon / 30) % 12
     pos      = lon % 30
-    if sign_idx % 2 == 0:               # odd sign (1st, 3rd, 5th …)
-        d2 = 4 if pos < 15 else 3       # Leo (Sun hora) → Cancer (Moon hora)
+    if sign_idx % 2 == 0:               # odd sign (1st, 3rd, 5th ...)
+        d2 = 4 if pos < 15 else 3       # Leo (Sun hora) -> Cancer (Moon hora)
     else:                               # even sign
-        d2 = 3 if pos < 15 else 4       # Cancer → Leo
+        d2 = 3 if pos < 15 else 4       # Cancer -> Leo
     return d2, SIGNS[d2]
 
 
 def drekkana_sign(lon: float) -> tuple[int, str]:
     """
-    D3 — Drekkana. Three equal parts of 10° each.
-    Part 1 (0-10°):   same sign
-    Part 2 (10-20°):  5th from same sign  (+4)
-    Part 3 (20-30°):  9th from same sign  (+8)
+    D3 - Drekkana. Three equal parts of 10 each.
+    Part 1 (0-10):   same sign
+    Part 2 (10-20):  5th from same sign  (+4)
+    Part 3 (20-30):  9th from same sign  (+8)
     """
     sign_idx = int(lon / 30) % 12
     pos  = lon % 30
@@ -231,11 +246,11 @@ def drekkana_sign(lon: float) -> tuple[int, str]:
 
 def chaturthamsa_sign(lon: float) -> tuple[int, str]:
     """
-    D4 — Chaturthamsa. Four equal parts of 7°30' each.
-    Part 1 (0–7.5°):    same sign
-    Part 2 (7.5–15°):   4th sign  (+3)
-    Part 3 (15–22.5°):  7th sign  (+6)
-    Part 4 (22.5–30°):  10th sign (+9)
+    D4 - Chaturthamsa. Four equal parts of 7.5 each.
+    Part 1 (0-7.5):    same sign
+    Part 2 (7.5-15):   4th sign  (+3)
+    Part 3 (15-22.5):  7th sign  (+6)
+    Part 4 (22.5-30):  10th sign (+9)
     """
     sign_idx = int(lon / 30) % 12
     pos  = lon % 30
@@ -246,7 +261,7 @@ def chaturthamsa_sign(lon: float) -> tuple[int, str]:
 
 def panchamsa_sign(lon: float) -> tuple[int, str]:
     """
-    D5 — Panchamsa. Five equal parts of 6° each.
+    D5 - Panchamsa. Five equal parts of 6 each.
     Odd  signs: Aries(0), Aquarius(10), Sagittarius(8), Gemini(2), Libra(6)
     Even signs: Taurus(1), Virgo(5), Capricorn(9), Pisces(11), Scorpio(7)
     """
@@ -262,7 +277,7 @@ def panchamsa_sign(lon: float) -> tuple[int, str]:
 
 def shashthamsa_sign(lon: float) -> tuple[int, str]:
     """
-    D6 — Shashthamsa. Six equal parts of 5° each.
+    D6 - Shashthamsa. Six equal parts of 5 each.
     Odd  signs: count from same sign.
     Even signs: count from 7th sign (opposite).
     """
@@ -278,7 +293,7 @@ def shashthamsa_sign(lon: float) -> tuple[int, str]:
 
 def saptamsa_sign(lon: float) -> tuple[int, str]:
     """
-    D7 — Saptamsa. Seven equal parts of ~4°17' each.
+    D7 - Saptamsa. Seven equal parts of ~4.286 each.
     Odd  signs: count from same sign.
     Even signs: count from 7th sign.
     """
@@ -294,7 +309,7 @@ def saptamsa_sign(lon: float) -> tuple[int, str]:
 
 def ashtamsa_sign(lon: float) -> tuple[int, str]:
     """
-    D8 — Ashtamsa. Eight equal parts of 3°45' each.
+    D8 - Ashtamsa. Eight equal parts of 3.75 each.
     Movable signs (0,3,6,9):  count from same sign.
     Fixed   signs (1,4,7,10): count from 9th sign (+8).
     Dual    signs (2,5,8,11): count from 5th sign (+4).
@@ -310,16 +325,16 @@ def ashtamsa_sign(lon: float) -> tuple[int, str]:
 
 def navamsa_sign(lon: float) -> tuple[int, str]:
     """
-    D9 — Navamsa. Nine equal parts of 3°20' each.
+    D9 - Navamsa. Nine equal parts of 3.333 each.
     Starting sign determined by the D1 sign's element:
-        Fire  (Ar, Le, Sg) → Aries  (0)
-        Earth (Ta, Vi, Cp) → Capricorn (9)
-        Air   (Ge, Li, Aq) → Libra  (6)
-        Water (Ca, Sc, Pi) → Cancer (3)
+        Fire  (Ar, Le, Sg) -> Aries  (0)
+        Earth (Ta, Vi, Cp) -> Capricorn (9)
+        Air   (Ge, Li, Aq) -> Libra  (6)
+        Water (Ca, Sc, Pi) -> Cancer (3)
     """
     sign_idx    = int(lon / 30) % 12
     pos         = lon % 30
-    nav_idx     = int(pos / (10.0 / 3.0))   # 3°20' = 10/3°
+    nav_idx     = int(pos / (10.0 / 3.0))   # 3.333 per division
     element     = SIGN_ELEMENT[sign_idx]
     start       = NAVAMSA_START[element]
     d9          = (start + nav_idx) % 12
@@ -328,7 +343,7 @@ def navamsa_sign(lon: float) -> tuple[int, str]:
 
 def dasamsa_sign(lon: float) -> tuple[int, str]:
     """
-    D10 — Dasamsa. Ten equal parts of 3° each.
+    D10 - Dasamsa. Ten equal parts of 3 each.
     Odd  signs (sign_idx % 2 == 0): count from same sign.
     Even signs (sign_idx % 2 == 1): count from 9th sign (+8).
     """
@@ -344,7 +359,7 @@ def dasamsa_sign(lon: float) -> tuple[int, str]:
 
 def ekadasamsa_sign(lon: float) -> tuple[int, str]:
     """
-    D11 — Ekadasamsa. Eleven equal parts of ~2°44' each.
+    D11 - Ekadasamsa. Eleven equal parts of ~2.727 each.
     Odd  signs: count from same sign.
     Even signs: count from 7th sign.
     """
@@ -360,7 +375,7 @@ def ekadasamsa_sign(lon: float) -> tuple[int, str]:
 
 def dwadasamsa_sign(lon: float) -> tuple[int, str]:
     """
-    D12 — Dwadasamsa. Twelve equal parts of 2°30' each.
+    D12 - Dwadasamsa. Twelve equal parts of 2.5 each.
     Always count from same sign through all 12 signs.
     """
     sign_idx = int(lon / 30) % 12
@@ -372,10 +387,10 @@ def dwadasamsa_sign(lon: float) -> tuple[int, str]:
 
 def shodasamsa_sign(lon: float) -> tuple[int, str]:
     """
-    D16 — Shodasamsa. Sixteen equal parts of 1°52'30\" each.
-    Movable signs → from Aries       (0)
-    Fixed   signs → from Leo         (4)
-    Dual    signs → from Sagittarius (8)
+    D16 - Shodasamsa. Sixteen equal parts of 1.875 each.
+    Movable signs -> from Aries       (0)
+    Fixed   signs -> from Leo         (4)
+    Dual    signs -> from Sagittarius (8)
     """
     sign_idx = int(lon / 30) % 12
     pos  = lon % 30
@@ -388,10 +403,10 @@ def shodasamsa_sign(lon: float) -> tuple[int, str]:
 
 def vimshamsa_sign(lon: float) -> tuple[int, str]:
     """
-    D20 — Vimshamsa. Twenty equal parts of 1°30' each.
-    Movable signs → from Aries       (0)
-    Fixed   signs → from Sagittarius (8)
-    Dual    signs → from Leo         (4)
+    D20 - Vimshamsa. Twenty equal parts of 1.5 each.
+    Movable signs -> from Aries       (0)
+    Fixed   signs -> from Sagittarius (8)
+    Dual    signs -> from Leo         (4)
     """
     sign_idx = int(lon / 30) % 12
     pos  = lon % 30
@@ -404,7 +419,7 @@ def vimshamsa_sign(lon: float) -> tuple[int, str]:
 
 def chaturvimshamsa_sign(lon: float) -> tuple[int, str]:
     """
-    D24 — Chaturvimshamsa / Siddhamsa. Twenty-four equal parts of 1°15' each.
+    D24 - Chaturvimshamsa / Siddhamsa. Twenty-four equal parts of 1.25 each.
     Odd  signs (sign_idx % 2 == 0): count from Leo    (4)
     Even signs (sign_idx % 2 == 1): count from Cancer (3)
     """
@@ -418,15 +433,15 @@ def chaturvimshamsa_sign(lon: float) -> tuple[int, str]:
 
 def saptavimshamsa_sign(lon: float) -> tuple[int, str]:
     """
-    D27 — Saptavimshamsa / Nakshatramsa. Twenty-seven equal parts of ~1°6'40\" each.
-    Fire  signs → from Aries      (0)
-    Earth signs → from Cancer     (3)
-    Air   signs → from Libra      (6)
-    Water signs → from Capricorn  (9)
+    D27 - Saptavimshamsa / Nakshatramsa. Twenty-seven equal parts of ~1.111 each.
+    Fire  signs -> from Aries      (0)
+    Earth signs -> from Cancer     (3)
+    Air   signs -> from Libra      (6)
+    Water signs -> from Capricorn  (9)
     """
     sign_idx = int(lon / 30) % 12
     pos  = lon % 30
-    part = int(pos / (10.0 / 9.0))    # 0-26  (10/9° per part)
+    part = int(pos / (10.0 / 9.0))    # 0-26  (10/9 per part)
     elem  = SIGN_ELEMENT[sign_idx]
     starts = {"fire": 0, "earth": 3, "air": 6, "water": 9}
     d27  = (starts[elem] + part) % 12
@@ -435,21 +450,21 @@ def saptavimshamsa_sign(lon: float) -> tuple[int, str]:
 
 def trimshamsa_sign(lon: float) -> tuple[int, str]:
     """
-    D30 — Trimshamsa. UNEQUAL divisions (Parashari).
+    D30 - Trimshamsa. UNEQUAL divisions (Parashari).
 
     Odd signs:
-        Mars    0– 5° → Aries       (0)
-        Saturn  5–10° → Aquarius   (10)
-        Jupiter 10–18° → Sagittarius(8)
-        Mercury 18–25° → Gemini     (2)
-        Venus   25–30° → Libra      (6)
+        Mars    0-5   -> Aries       (0)
+        Saturn  5-10  -> Aquarius   (10)
+        Jupiter 10-18 -> Sagittarius (8)
+        Mercury 18-25 -> Gemini      (2)
+        Venus   25-30 -> Libra       (6)
 
     Even signs:
-        Venus   0– 5° → Taurus      (1)
-        Mercury 5–12° → Virgo       (5)
-        Jupiter 12–20° → Pisces    (11)
-        Saturn  20–25° → Capricorn  (9)
-        Mars    25–30° → Scorpio    (7)
+        Venus   0-5   -> Taurus      (1)
+        Mercury 5-12  -> Virgo       (5)
+        Jupiter 12-20 -> Pisces     (11)
+        Saturn  20-25 -> Capricorn   (9)
+        Mars    25-30 -> Scorpio     (7)
     """
     sign_idx = int(lon / 30) % 12
     pos = lon % 30
@@ -466,7 +481,7 @@ def trimshamsa_sign(lon: float) -> tuple[int, str]:
 
 def khavedamsa_sign(lon: float) -> tuple[int, str]:
     """
-    D40 — Khavedamsa. Forty equal parts of 0°45' each.
+    D40 - Khavedamsa. Forty equal parts of 0.75 each.
     Odd  signs: count from Aries (0).
     Even signs: count from Libra (6).
     """
@@ -480,10 +495,10 @@ def khavedamsa_sign(lon: float) -> tuple[int, str]:
 
 def akshavedamsa_sign(lon: float) -> tuple[int, str]:
     """
-    D45 — Akshavedamsa. Forty-five equal parts of 0°40' each.
-    Movable signs → from Aries       (0)
-    Fixed   signs → from Leo         (4)
-    Dual    signs → from Sagittarius (8)
+    D45 - Akshavedamsa. Forty-five equal parts of 0.667 each.
+    Movable signs -> from Aries       (0)
+    Fixed   signs -> from Leo         (4)
+    Dual    signs -> from Sagittarius (8)
     """
     sign_idx = int(lon / 30) % 12
     pos  = lon % 30
@@ -496,30 +511,30 @@ def akshavedamsa_sign(lon: float) -> tuple[int, str]:
 
 def shashtiamsa_sign(lon: float) -> tuple[int, str]:
     """
-    D60 — Shashtiamsa. Sixty equal parts of 0°30' each.
+    D60 - Shashtiamsa. Sixty equal parts of 0.5 each.
 
     Classical Parashari rule (BPHS):
       Odd  signs (Aries, Gemini, Leo, Libra, Sagittarius, Aquarius):
-          count FORWARD  from Aries  — divisions 0-59 → (0  + part) % 12
+          count FORWARD  from Aries  -- divisions 0-59 -> (0  + part) % 12
       Even signs (Taurus, Cancer, Virgo, Scorpio, Capricorn, Pisces):
-          count BACKWARD from Libra  — divisions 0-59 → (6  - part) % 12
+          count BACKWARD from Libra  -- divisions 0-59 -> (6  - part) % 12
 
     In 0-indexed sign numbering, even indices (0,2,4,6,8,10) are the
-    traditionally ODD signs, so the condition is `sign_idx % 2 == 0`.
+    traditionally ODD signs, so the condition is sign_idx % 2 == 0.
     """
     sign_idx = int(lon / 30) % 12
     pos      = lon % 30
     part     = int(pos / 0.5)          # 0-59
 
-    if sign_idx % 2 == 0:              # Odd sign  → forward from Aries
+    if sign_idx % 2 == 0:              # Odd sign  -> forward from Aries
         d60 = (0 + part) % 12
-    else:                              # Even sign → backward from Libra
+    else:                              # Even sign -> backward from Libra
         d60 = (6 - part) % 12
 
     return d60, SIGNS[d60]
 
 
-# ─── Registry of all divisional charts ───────────────────────────────────────
+# --- Registry of all divisional charts ---------------------------------------
 
 DIVISIONAL_CHARTS: dict[str, callable] = {
     "d2":  hora_sign,
@@ -571,9 +586,9 @@ DIVISIONAL_PURPOSE: dict[str, str] = {
     "d4":  "Fortune, Property & Fixed Assets",
     "d5":  "Children, Intelligence & Past-Life Merits",
     "d6":  "Enemies, Debts, Disease & Service",
-    "d7":  "Children & Progeny (detailed)",
+    "d7":  "Children & Progeny",
     "d8":  "Obstacles, Longevity & Hidden Dangers",
-    "d9":  "Soul's True Path, Dharma & Marriage",
+    "d9":  "Soul Path, Dharma & Marriage",
     "d10": "Career, Status & Public Life",
     "d11": "Gains, Income & Social Network",
     "d12": "Parents & Ancestral Lineage",
@@ -584,11 +599,11 @@ DIVISIONAL_PURPOSE: dict[str, str] = {
     "d30": "Misfortunes, Karma & Challenges",
     "d40": "Maternal Legacy & Auspicious Effects",
     "d45": "Paternal Legacy & General Indications",
-    "d60": "Past-Life Karma (most granular)",
+    "d60": "Past-Life Karma",
 }
 
 
-# ─── Main calculation function ────────────────────────────────────────────────
+# --- Main calculation function ------------------------------------------------
 
 def calculate_chart(
     dt_utc: datetime,
@@ -609,14 +624,14 @@ def calculate_chart(
     Returns
     -------
     dict with keys:
-        meta, core_trinity, d1,
-        d2 … d60  (each divisional chart planet data),
-        d2_asc … d60_asc  (each chart's own ascendant sign index)
+        meta, core_trinity, d1, d1_asc,
+        d2 ... d60  (each divisional chart planet data),
+        d2_asc ... d60_asc  (each chart's own ascendant sign index)
     """
     swe.set_sid_mode(ayanamsha)
     jd = to_jd(dt_utc)
 
-    # ── Ascendant (D1) ────────────────────────────────────────────────────
+    # -- Ascendant (D1) -------------------------------------------------------
     swe.set_sid_mode(ayanamsha)
     houses_data   = swe.houses_ex(jd, lat, lon, b"W")   # Whole Sign
     ayanamsha_val = swe.get_ayanamsa_ut(jd)
@@ -626,7 +641,7 @@ def calculate_chart(
     asc_sign_idx, asc_sign_name, asc_deg = get_sign_and_degree(asc_sidereal)
     asc_nak, asc_pada, asc_nak_lord      = get_nakshatra_info(asc_sidereal)
 
-    # ── BUG FIX: Compute each divisional chart's OWN ascendant ───────────
+    # -- Compute each divisional chart's OWN ascendant ------------------------
     # Each Dx chart has its own rising sign, obtained by applying the same
     # divisional formula to the D1 ascendant longitude.
     # Houses for planets inside Dx are measured from that Dx ascendant.
@@ -634,7 +649,7 @@ def calculate_chart(
     for key, fn in DIVISIONAL_CHARTS.items():
         div_asc[key], _ = fn(asc_sidereal)
 
-    # ── Collect raw planet data ───────────────────────────────────────────
+    # -- Collect raw planet data ----------------------------------------------
     raw: dict[str, dict] = {}
     sun_lon: float | None = None
 
@@ -645,13 +660,13 @@ def calculate_chart(
         if name == "Sun":
             sun_lon = sid_lon
 
-    # Ketu = Rahu + 180°
+    # Ketu = Rahu + 180
     raw["Ketu"] = {
         "lon":   (raw["Rahu"]["lon"] + 180) % 360,
         "speed": raw["Rahu"]["speed"]
     }
 
-    # ── Build D1 data ─────────────────────────────────────────────────────
+    # -- Build D1 data --------------------------------------------------------
     d1: dict[str, dict] = {}
 
     for name in PLANETS_ORDER:
@@ -697,7 +712,7 @@ def calculate_chart(
             "vargottam":   vargottam,
         }
 
-    # ── Build all divisional chart data ──────────────────────────────────
+    # -- Build all divisional chart data --------------------------------------
     divisional_data: dict[str, dict[str, dict]] = {}
 
     for key, fn in DIVISIONAL_CHARTS.items():
@@ -705,7 +720,7 @@ def calculate_chart(
         chart_planets: dict[str, dict] = {}
         for name in PLANETS_ORDER:
             p_sign_idx, p_sign_name = fn(raw[name]["lon"])
-            # ✓ House measured from this chart's own ascendant (the fix)
+            # House measured from this chart's own ascendant
             p_house = whole_sign_house(p_sign_idx, chart_asc)
             chart_planets[name] = {
                 "sign":     p_sign_name,
@@ -714,7 +729,7 @@ def calculate_chart(
             }
         divisional_data[key] = chart_planets
 
-    # ── Core Trinity ─────────────────────────────────────────────────────
+    # -- Core Trinity ---------------------------------------------------------
     moon_nak, moon_pada, moon_nak_lord = get_nakshatra_info(raw["Moon"]["lon"])
     _, sun_sign,  _                    = get_sign_and_degree(raw["Sun"]["lon"])
     _, moon_sign, _                    = get_sign_and_degree(raw["Moon"]["lon"])
@@ -741,7 +756,7 @@ def calculate_chart(
         },
     }
 
-    # ── Assemble result ───────────────────────────────────────────────────
+    # -- Assemble result ------------------------------------------------------
     result: dict = {
         "meta": {
             "ayanamsha_val":  round(ayanamsha_val, 4),
@@ -749,10 +764,12 @@ def calculate_chart(
             "jd":             round(jd, 4),
         },
         "core_trinity": core_trinity,
-        "d1":           d1,
-        # ── Full-precision sidereal longitudes ──────────────────────────────
-        # Used by prompt_builder for second-accurate Vimshottari dasha timing.
-        # Do NOT round these — the dasha engine needs every decimal place.
+        "d1":            d1,
+        # D1 ascendant sign index — used by prompt_builder.detect_yogas()
+        # without fragile Moon-based derivation.
+        "d1_asc":        asc_sign_idx,
+        # Full-precision sidereal longitudes for Vimshottari dasha timing.
+        # Do NOT round — the dasha engine needs every decimal place.
         "raw_lons": {
             name: raw[name]["lon"] for name in PLANETS_ORDER
         } | {"Ascendant": asc_sidereal},
@@ -760,23 +777,23 @@ def calculate_chart(
 
     # Divisional charts + their ascendant indices
     for key in DIVISIONAL_CHARTS:
-        result[key]              = divisional_data[key]
-        result[f"{key}_asc"]     = div_asc[key]          # e.g. "d9_asc" = 6 (Libra)
+        result[key]          = divisional_data[key]
+        result[f"{key}_asc"] = div_asc[key]   # e.g. "d9_asc" = 6 (Libra)
 
     return result
 
 
-# ─── Formatter ────────────────────────────────────────────────────────────────
+# --- Formatter ----------------------------------------------------------------
 
 def _flags(p: dict) -> str:
-    """Build a concise flag string, e.g. 'Retrograde | Combust | Vargottam'."""
+    """Build a concise flag string, e.g. 'Retro | Combust | Debil'."""
     parts = []
-    if p.get("retrograde"):   parts.append("Retrograde")
+    if p.get("retrograde"):   parts.append("Retro")
     if p.get("combust"):      parts.append("Combust")
-    if p.get("debilitated"):  parts.append("Debilitated")
-    if p.get("exalted"):      parts.append("Exalted")
+    if p.get("debilitated"):  parts.append("Debil")
+    if p.get("exalted"):      parts.append("Exalt")
     if p.get("vargottam"):    parts.append("Vargottam")
-    return " | ".join(parts) if parts else "—"
+    return " | ".join(parts) if parts else "-"
 
 
 DEFAULT_PROMPT_CHARTS = {"d9", "d10"}   # always shown alongside D1
@@ -784,77 +801,76 @@ DEFAULT_PROMPT_CHARTS = {"d9", "d10"}   # always shown alongside D1
 
 def format_for_prompt(chart: dict, extra_charts: list | None = None) -> str:
     """
-    Render chart data into a structured text block for Claude.
+    Render chart data as a compact text block for Claude's system prompt.
 
-    D1 is always included in full detail.
+    D1 is always included in full detail (sign, house, degree, nakshatra, flags).
     D9 (Navamsa) and D10 (Dasamsa) are always included.
     extra_charts: additional keys to include, e.g. ["d3", "d60"].
 
-    Keeping the prompt lean saves ~2 500 tokens vs dumping all 19 charts.
+    TOKEN OPTIMISATIONS vs v2:
+    - ASCII separators (--- / ---) replace Unicode box-drawing chars (~258 tokens saved)
+    - Purpose strings removed from divisional chart headers (~166 tokens saved)
+    - Column headers shortened; house column narrowed to 2 chars (~135 tokens saved)
+    - Flag abbreviations shortened (Retro/Debil/Exalt vs Retrograde/Debilitated/Exalted)
+    Total: ~400 tokens saved when all 20 charts are loaded.
     """
     include: set[str] = set(DEFAULT_PROMPT_CHARTS)
     if extra_charts:
         include.update(extra_charts)
+
     ct = chart["core_trinity"]
     d1 = chart["d1"]
     lines: list[str] = []
 
-    # ── Core Trinity ──────────────────────────────────────────────────────
-    lines.append("THE CORE TRINITY")
+    # -- Core Trinity ---------------------------------------------------------
     asc  = ct["ascendant"]
     moon = ct["moon"]
     sun  = ct["sun"]
-    lines.append(f"Ascendant (Mask): {asc['sign']} {asc['degrees']:.1f}° | Nakshatra: {asc['nakshatra']} Pada {asc['pada']}")
-    lines.append(f"Nakshatra (Star): {moon['nakshatra']} Pada {moon['pada']} (Lord: {moon['nak_lord']})")
-    lines.append(f"Sun  (Ego):       {sun['sign']} | House {sun['house']} | {sun['nakshatra']} Pada {sun['pada']}")
-    lines.append(f"Moon (Soul):      {moon['sign']} | House {moon['house']} | {moon['nakshatra']} Pada {moon['pada']}")
-    lines.append("━" * 60)
+    lines.append("CORE TRINITY")
+    lines.append(f"ASC: {asc['sign']} {asc['degrees']:.1f} | Nak: {asc['nakshatra']} P{asc['pada']}")
+    lines.append(f"Sun:  {sun['sign']} H{sun['house']} | {sun['nakshatra']} P{sun['pada']}")
+    lines.append(f"Moon: {moon['sign']} H{moon['house']} | {moon['nakshatra']} P{moon['pada']} (lord: {moon['nak_lord']})")
+    lines.append("---")
 
-    # ── D1 — Full detail ─────────────────────────────────────────────────
-    lines.append("D1 RASI — Physical Reality & Life Blueprint")
-    lines.append(f"  Ascendant: {ct['ascendant']['sign']}")
-    lines.append(f"  {'Planet':<9} {'Sign':<14} {'House':>5} {'Deg':>6} {'Nakshatra':<24} {'Flags'}")
-    lines.append("  " + "─" * 85)
+    # -- D1 — Full detail -----------------------------------------------------
+    lines.append(f"D1 RASI | ASC: {asc['sign']}")
+    lines.append(f"  {'Planet':<9} {'Sign':<14} {'H':>2} {'Deg':>5} {'Nakshatra':<20} Flags")
+    lines.append("  " + "-" * 66)
     for name in PLANETS_ORDER:
         p = d1[name]
-        row = (
+        nak_str = f"{p['nakshatra']} P{p['pada']}"
+        lines.append(
             f"  {name:<9} "
             f"{p['sign']:<14} "
-            f"{p['house']:>5} "
-            f"{p['degrees']:>5.1f}° "
-            f"{p['nakshatra'] + ' P' + str(p['pada']):<24} "
+            f"{p['house']:>2} "
+            f"{p['degrees']:>5.1f} "
+            f"{nak_str:<20} "
             f"{_flags(p)}"
         )
-        lines.append(row)
+    lines.append("---")
 
-    lines.append("")
-    lines.append("━" * 60)
-
-    # ── Divisional charts (only those in `include`) ───────────────────────
+    # -- Divisional charts (only those in include) ----------------------------
     for key in DIVISIONAL_CHARTS:
         if key not in include:
             continue
         num      = key.upper()
         fullname = DIVISIONAL_NAMES[key]
-        purpose  = DIVISIONAL_PURPOSE[key]
         asc_idx  = chart.get(f"{key}_asc", 0)
         asc_name = SIGNS[asc_idx]
         planets  = chart[key]
 
-        lines.append(f"{num} {fullname} — {purpose}")
-        lines.append(f"  Ascendant: {asc_name}")
-        lines.append(f"  {'Planet':<9} {'Sign':<14} {'House':>5}")
-        lines.append("  " + "─" * 32)
+        lines.append(f"{num} {fullname} | ASC: {asc_name}")
+        lines.append(f"  {'Planet':<9} {'Sign':<14} H")
+        lines.append("  " + "-" * 28)
         for name in PLANETS_ORDER:
             p = planets[name]
-            lines.append(f"  {name:<9} {p['sign']:<14} {p['house']:>5}")
-        lines.append("")
-        lines.append("━" * 60)
+            lines.append(f"  {name:<9} {p['sign']:<14} {p['house']:>2}")
+        lines.append("---")
 
     return "\n".join(lines)
 
 
-# ─── Quick test ───────────────────────────────────────────────────────────────
+# --- Quick test ---------------------------------------------------------------
 
 if __name__ == "__main__":
     # Test: Jan 1 1990, 12:00 IST = 06:30 UTC, Mumbai (18.97N, 72.83E)
@@ -866,4 +882,5 @@ if __name__ == "__main__":
     for key in DIVISIONAL_CHARTS:
         asc_idx = chart[f"{key}_asc"]
         print(f"  {key.upper():<4} ASC: {SIGNS[asc_idx]}")
-    print("\nAll result keys:", list(chart.keys()))
+    print("\nD1 ASC index:", chart["d1_asc"])
+    print("All result keys:", list(chart.keys()))
